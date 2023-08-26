@@ -1,0 +1,9 @@
+[package]
+name = "netstack"
+version = "0.1.0"
+edition = "2021"
+authors = ["Anhad Singh <andypython@protonmail.com"]
+
+[dependencies]
+byte_endian = { git = "https://github.com/aero-os/byte_endian" }
+static_assertions = "1.1.0"

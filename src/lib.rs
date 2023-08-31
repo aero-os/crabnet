@@ -1,244 +1,216 @@
-#![warn(clippy::pedantic)]
-#![feature(arbitrary_self_types)]
+// #![no_std]
 
-extern crate alloc;
-
-use alloc::alloc::Layout;
-
-use core::marker::PhantomData;
-use core::ops::{Deref, DerefMut};
-use core::ptr::NonNull;
-
-pub mod checksum;
 pub mod data_link;
 pub mod network;
 pub mod transport;
 
+extern crate alloc;
+
+use core::alloc::Layout;
+use core::marker::PhantomData;
+use core::ptr::NonNull;
+
 #[macro_export]
-macro_rules! net_enum {
-    ($vis:vis enum $name:ident($repr:ident) { $($field:ident = $value:expr),+ }) => {
-        #[derive(Debug, Copy, Clone, PartialEq)]
-        #[repr($repr)]
-        $vis enum $name {
-            $($field = $repr::to_be($value)),*
+macro_rules! make {
+    (
+        struct $name:ident { $($field_name:ident : $ty:ty),* }
+
+        $($rest:tt)*
+    ) => {
+        #[repr(C)]
+        pub struct $name {
+            $(pub $field_name: $ty),*
+        }
+
+        impl<U: $crate::Stackable> core::ops::Shl<U> for $name {
+            type Output = $crate::Stacked<Self, U>;
+
+            #[inline]
+            fn shl(self, rhs: U) -> Self::Output {
+                dbg!("a");
+                use $crate::Stackable;
+                $crate::Stacked::<Self, U>(self.correct_checksum(rhs.write_len()), rhs)
+            }
+        }
+
+        $crate::make!($($rest)* for $name;);
+    };
+
+    (@checksum |$self:ident| $checksum:block for $name:ident;) => {
+        impl $crate::Stackable for $name {
+            #[inline]
+            fn correct_checksum($self, _size: usize) -> Self {
+                $checksum
+            }
+
+            fn write_len(&self) -> usize {
+                core::mem::size_of::<Self>()
+            }
         }
     };
+
+    (@checksum |mut $self:ident, $size:ident: usize| $checksum:block for $name:ident;) => {
+        impl $crate::Stackable for $name {
+            #[inline]
+            fn correct_checksum(mut $self, $size: usize) -> Self {
+                $checksum
+            }
+
+            fn write_len(&self) -> usize {
+                core::mem::size_of::<Self>()
+            }
+        }
+    };
+
+    () => {}
 }
 
-pub trait IsPacket: Sized {}
+make! {
+    struct Udp {
+        x: u8
+    }
 
-pub trait PacketHierarchy: Sized {
-    /// Returns a pointer to the data-link layer (OSI layer 2).
-    fn data_ptr(&self) -> NonNull<u8>;
-
-    /// Returns the layout of the data-link layer (OSI layer 2).
-    fn data_layout(&self) -> Layout;
-
-    /// Returns a pointer to the raw packet.
-    fn ptr(&self) -> NonNull<u8>;
-
-    /// Returns the size of the packet in bytes.
-    fn size(&self) -> usize;
+    @checksum |self| { self }
 }
 
-pub trait Header: PacketHierarchy {
-    /// Returns the size of the header in bytes.
-    fn header_size(&self) -> usize;
+pub trait Stackable {
+    fn correct_checksum(self, size: usize) -> Self;
+    fn write_len(&self) -> usize;
 }
 
-pub trait ConstHeader: IsPacket {
-    /// The size of the header in bytes.
-    const HEADER_SIZE: usize = core::mem::size_of::<Self>();
-}
+#[repr(C)]
+pub struct Stacked<T: Stackable, U: Stackable>(T, U);
 
-impl<T: ConstHeader> IsPacket for T {}
-impl<T: ConstHeader> Header for Packet<T> {
-    fn header_size(&self) -> usize {
-        T::HEADER_SIZE
+impl<T: Stackable, U: Stackable> Stackable for Stacked<T, U> {
+    fn correct_checksum(self, size: usize) -> Self {
+        let rhs = self.1.write_len();
+
+        Stacked(
+            self.0.correct_checksum(rhs + size),
+            self.1.correct_checksum(size),
+        )
+    }
+
+    fn write_len(&self) -> usize {
+        self.0.write_len() + self.1.write_len()
     }
 }
 
-pub struct Packet<T: IsPacket> {
-    /// Pointer to the base packet.
-    base_ptr: NonNull<T>,
-    /// Layout of the base packet.
-    base_layout: Layout,
+// T: Current
+// U: Next
+// R: Next of U
+impl<T: Stackable, U: Stackable, R: Stackable> core::ops::Shl<R> for Stacked<T, U> {
+    // Stacked<Stacked<T, U>, R>
+    type Output = Stacked<Self, R>;
 
-    self_ptr: NonNull<T>,
-    self_size: usize,
+    #[inline]
+    fn shl(self, rhs: R) -> Self::Output {
+        // :: Stacked<Stacked<Eth, Ip>, Udp>
+        //                              ^^^ RHS or `rhs`
+        //            ^^^^^^^^^^^^^^^^ LHS or `self`
+        //
+        // U.write_len() += R.write_len()
+        // T.write_len() += R.write_len()
+        let rhs_len = rhs.write_len();
+        Stacked::<Self, R>(self.correct_checksum(rhs_len), rhs)
+    }
+}
 
-    // XXX: This marker is required for dropck to understand that we logically own a T.
+impl<const N: usize, T> Stackable for [T; N] {
+    #[inline]
+    fn correct_checksum(self, size: usize) -> Self {
+        assert_eq!(size, 0);
+        self
+    }
+
+    fn write_len(&self) -> usize {
+        core::mem::size_of::<Self>()
+    }
+}
+
+pub struct Packet<T: Stackable> {
+    ptr: NonNull<T>,
+    layout: Layout,
+
     _marker: PhantomData<T>,
 }
 
-impl<T: IsPacket> Packet<T> {
-    /// Constructs a new packet with the given payload size (`size`).
+impl<T: Stackable> Packet<T> {
+    /// Constructs a new packet.
     ///
     /// ## Panics
-    /// This function panics if the total size of the packet exceeds `isize::MAX` after alignment.
-    pub fn new(size: usize) -> Packet<T>
-    where
-        T: ConstHeader,
-    {
+    /// This function panics if the size of the packet exceeds `isize::MAX` after alignment.
+    pub fn new(value: T) -> Self {
         const ALIGNMENT: usize = 4096;
 
-        let total_size = T::HEADER_SIZE + size;
+        let size = core::mem::size_of::<T>();
 
-        // Check that the total size does not exceed the maximum size for the alignment.
+        // Check that the size does not exceed the maximum size for the alignment.
         assert!(size <= (isize::MAX as usize - (ALIGNMENT - 1)));
 
-        // SAFETY: We have verified that `total_size` is less than `isize::MAX` and the alignment is
+        // SAFETY: We have verified that `size` is less than `isize::MAX` and the alignment is
         // non-zero and a power of two.
-        let layout = unsafe { Layout::from_size_align_unchecked(total_size, ALIGNMENT) };
-        let size = layout.size();
+        let layout = unsafe { Layout::from_size_align_unchecked(size, ALIGNMENT) };
 
         // SAFETY: The layout has a non-zero size and is properly aligned.
         let ptr = unsafe { alloc::alloc::alloc(layout) }.cast::<T>();
-        let Some(ptr) = NonNull::new(ptr) else {
+        let Some(mut ptr) = NonNull::new(ptr) else {
             // Alloction failed, `ptr` is null, call the error handler.
             alloc::alloc::handle_alloc_error(layout);
         };
 
-        Packet {
-            base_ptr: ptr,
-            base_layout: layout,
-            self_ptr: ptr,
-            self_size: size,
+        unsafe {
+            *ptr.as_mut() = value;
+        }
+
+        Self {
+            ptr,
+            layout,
+
             _marker: PhantomData,
         }
     }
-
-    #[inline]
-    pub fn header(&self) -> &T {
-        self
-    }
 }
 
-impl<T: IsPacket> Deref for Packet<T> {
+impl<T: Stackable> core::ops::Deref for Packet<T> {
     type Target = T;
 
-    #[inline]
     fn deref(&self) -> &Self::Target {
-        unsafe { self.self_ptr.as_ref() }
+        unsafe { self.ptr.as_ref() }
     }
 }
 
-impl<T: IsPacket> DerefMut for Packet<T> {
-    #[inline]
+impl<T: Stackable> core::ops::DerefMut for Packet<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { self.self_ptr.as_mut() }
+        unsafe { self.ptr.as_mut() }
     }
 }
 
-impl<T: IsPacket> PacketHierarchy for Packet<T> {
-    #[inline]
-    fn data_ptr(&self) -> NonNull<u8> {
-        self.base_ptr.cast()
+impl<T: Stackable> Drop for Packet<T> {
+    fn drop(&mut self) {
+        let ptr = self.ptr.as_ptr();
+        unsafe { alloc::alloc::dealloc(ptr.cast(), self.layout) }
     }
-
-    #[inline]
-    fn data_layout(&self) -> Layout {
-        self.base_layout
-    }
-
-    #[inline]
-    fn ptr(&self) -> NonNull<u8> {
-        self.self_ptr.cast()
-    }
-
-    #[inline]
-    fn size(&self) -> usize {
-        self.self_size
-    }
-}
-
-pub trait PacketUpHierarchy<P: IsPacket>: Header {
-    /// Returns whether the packet can be safely upgraded to `P`.
-    fn can_upgrade(&self) -> bool;
-
-    fn upgrade(self) -> Packet<P> {
-        let header_size = self.header_size();
-
-        let self_ptr = unsafe { self.ptr().as_ptr().add(header_size) };
-        let self_size = self.size() - header_size;
-
-        assert!(self.can_upgrade() && self_size >= self.header_size());
-
-        Packet {
-            base_ptr: self.data_ptr().cast(),
-            base_layout: self.data_layout(),
-            self_ptr: unsafe { NonNull::new_unchecked(self_ptr.cast()) },
-            self_size,
-            _marker: PhantomData,
-        }
-    }
-}
-
-pub trait PacketDownHierarchy<P: ConstHeader>: PacketHierarchy {
-    fn downgrade(self) -> Packet<P> {
-        let header_size = P::HEADER_SIZE;
-
-        let self_ptr = unsafe { self.ptr().as_ptr().sub(header_size) };
-        let self_size = self.size() + header_size;
-
-        Packet {
-            base_ptr: self.data_ptr().cast(),
-            base_layout: self.data_layout(),
-            self_ptr: unsafe { NonNull::new_unchecked(self_ptr.cast()) },
-            self_size,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<'a, T, P> PacketDownHierarchy<P> for Packet<T>
-where
-    T: ConstHeader,
-    P: ConstHeader,
-    Packet<P>: PacketUpHierarchy<T> + 'a,
-{
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::network::Ipv4Addr;
-    use crate::transport::Udp;
-
-    use super::*;
-
-    #[test]
-    fn network_hierarchy() {
-        let dest_ip = Ipv4Addr::new(192, 168, 1, 1);
-        let dest_port = 80;
-
-        let src_ip = Ipv4Addr::new(192, 168, 1, 2);
-        let src_port = 12345;
-
-        let udp = Udp::new(0)
-            .set_dest(dest_ip, dest_port)
-            .set_src(src_ip, src_port)
-            .compute_checksum();
-
-        assert_eq!(udp.crc.to_native(), 0x4c01);
-
-        // Calling `compute_checksum` on the UDP packet should also update the checksum of
-        // the IPv4 packet.
-        let ip = udp.downgrade();
-        assert_eq!(ip.hcrc.to_native(), 0xf77d);
-    }
+mod test {
+    use super::data_link::{Ethernet, EthernetType, MacAddr};
+    use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
+    use super::transport::Udp;
+    use super::Packet;
 
     #[test]
-    fn net_enum_repr() {
-        net_enum! {
-            enum Test(u16) {
-                X = 0xfe
-            }
-        }
+    fn it_works() {
+        let eth = Ethernet::new(EthernetType::Ip, MacAddr::NULL, MacAddr::NULL);
+        let ip = Ipv4::new(Ipv4Type::Udp, Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST);
+        let udp = Udp::new(8080, 80);
 
-        if cfg!(target_endian = "big") {
-            assert_eq!(Test::X as u16, 0xfe);
-        } else {
-            assert_eq!(Test::X as u16, 0xfe00);
-        }
+        let packet = Packet::new(eth << ip << udp << [0u8; 8]);
+
+        // Ipv4:
+        assert_eq!(packet.0 .0 .1.length.to_native(), 16);
+        // Udp:
+        assert_eq!(packet.0 .1.length.to_native(), 8);
     }
 }

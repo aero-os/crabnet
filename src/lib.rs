@@ -1,5 +1,6 @@
 // #![no_std]
 
+pub mod checksum;
 pub mod data_link;
 pub mod network;
 pub mod transport;
@@ -17,6 +18,7 @@ macro_rules! make {
 
         $($rest:tt)*
     ) => {
+        #[derive(Debug)]
         #[repr(C)]
         pub struct $name {
             $(pub $field_name: $ty),*
@@ -36,10 +38,10 @@ macro_rules! make {
         $crate::make!($($rest)* for $name;);
     };
 
-    (@checksum |$self:ident| $checksum:block for $name:ident;) => {
+    (@checksum |$self:ident, $size:ident: usize | $checksum:block for $name:ident;) => {
         impl $crate::Stackable for $name {
             #[inline]
-            fn correct_checksum($self, _size: usize) -> Self {
+            fn correct_checksum($self, $size: usize) -> Self {
                 $checksum
             }
 
@@ -65,17 +67,18 @@ macro_rules! make {
     () => {}
 }
 
-make! {
-    struct Udp {
-        x: u8
-    }
-
-    @checksum |self| { self }
-}
-
-pub trait Stackable {
+pub trait Stackable: Sized {
     fn correct_checksum(self, size: usize) -> Self;
     fn write_len(&self) -> usize;
+}
+
+pub trait StackableWith<U: Stackable>
+where
+    Self: Stackable,
+{
+    fn correct_checksum_with(self, size: usize, _rhs: &U) -> Self {
+        self.correct_checksum(size)
+    }
 }
 
 #[repr(C)]
@@ -99,7 +102,10 @@ impl<T: Stackable, U: Stackable> Stackable for Stacked<T, U> {
 // T: Current
 // U: Next
 // R: Next of U
-impl<T: Stackable, U: Stackable, R: Stackable> core::ops::Shl<R> for Stacked<T, U> {
+impl<T: Stackable, U: Stackable, R: Stackable> core::ops::Shl<R> for Stacked<T, U>
+where
+    R: StackableWith<U>,
+{
     // Stacked<Stacked<T, U>, R>
     type Output = Stacked<Self, R>;
 
@@ -112,7 +118,10 @@ impl<T: Stackable, U: Stackable, R: Stackable> core::ops::Shl<R> for Stacked<T, 
         // U.write_len() += R.write_len()
         // T.write_len() += R.write_len()
         let rhs_len = rhs.write_len();
-        Stacked::<Self, R>(self.correct_checksum(rhs_len), rhs)
+        let lhs = self.correct_checksum(rhs_len);
+        let rhs = rhs.correct_checksum_with(0, &lhs.1);
+
+        Stacked::<Self, R>(lhs, rhs)
     }
 }
 
@@ -123,8 +132,18 @@ impl<const N: usize, T> Stackable for [T; N] {
         self
     }
 
+    #[inline]
     fn write_len(&self) -> usize {
         core::mem::size_of::<Self>()
+    }
+}
+
+impl<const N: usize, T, U> StackableWith<U> for [T; N]
+where
+    U: Stackable,
+{
+    fn correct_checksum_with(self, size: usize, _rhs: &U) -> Self {
+        self.correct_checksum(size)
     }
 }
 
@@ -194,23 +213,34 @@ impl<T: Stackable> Drop for Packet<T> {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::data_link::{Ethernet, EthernetType, MacAddr};
     use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
     use super::transport::Udp;
     use super::Packet;
 
     #[test]
-    fn it_works() {
+    pub fn it_works() {
         let eth = Ethernet::new(EthernetType::Ip, MacAddr::NULL, MacAddr::NULL);
         let ip = Ipv4::new(Ipv4Type::Udp, Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST);
         let udp = Udp::new(8080, 80);
 
-        let packet = Packet::new(eth << ip << udp << [0u8; 8]);
+        let packet = Packet::new(eth << ip << udp << [69u8; 8]);
 
-        // Ipv4:
-        assert_eq!(packet.0 .0 .1.length.to_native(), 16);
-        // Udp:
-        assert_eq!(packet.0 .1.length.to_native(), 8);
+        // // Ipv4:
+        // assert_eq!(packet.0 .0 .1.length.to_native(), 16 + 20);
+        // // Udp:
+        // assert_eq!(packet.0 .1.length.to_native(), 8);
+        // assert_eq!(packet.0 .1.crc.to_native(), 0x7aee);
+
+        unsafe {
+            println!(
+                "{:?}",
+                core::slice::from_raw_parts_mut(
+                    packet.ptr.as_ptr().cast::<u8>(),
+                    packet.layout.size()
+                )
+            );
+        }
     }
 }

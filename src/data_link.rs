@@ -8,6 +8,7 @@ impl MacAddr {
     pub const NULL: Self = Self([0; Self::ADDR_SIZE]);
 }
 
+#[derive(Debug)]
 #[repr(u16)]
 pub enum EthernetType {
     Ip = 0x800u16.swap_bytes(),
@@ -22,9 +23,7 @@ crate::make! {
         ty: EthernetType
     }
 
-    @checksum |mut self, size: usize| {
-        dbg!(size);
-        self }
+    @checksum |self, _size: usize| { self }
 }
 
 impl Ethernet {

@@ -1,5 +1,7 @@
 use byte_endian::BigEndian;
 
+use crate::checksum;
+
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
 #[repr(transparent)]
 pub struct Ipv4Addr(pub [u8; Self::ADDR_SIZE]);
@@ -39,7 +41,11 @@ crate::make! {
     }
 
     @checksum |mut self, size: usize| {
-        self.length = (size as u16).into();
+        self.length = ((core::mem::size_of::<Ipv4>() + size) as u16).into();
+
+        self.hcrc = 0.into();
+        self.hcrc = checksum::make(checksum::calculate(&self));
+
         self
     }
 }
@@ -49,7 +55,7 @@ impl Ipv4 {
         Self {
             v: 0x45.into(),
             tos: 0.into(),
-            length: u16::MAX.into(),
+            length: 0.into(),
             ident: 0.into(),
             frag_offset: 0.into(),
             ttl: 64.into(),

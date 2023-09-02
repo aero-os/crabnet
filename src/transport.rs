@@ -1,5 +1,7 @@
 use byte_endian::BigEndian;
 
+use crate::checksum::{self, PseudoHeader};
+
 crate::make! {
     // 8 bytes wide
     struct Udp {
@@ -10,7 +12,7 @@ crate::make! {
     }
 
     @checksum |mut self, size: usize| {
-        self.length = (size as u16).into();
+        self.length = ((core::mem::size_of::<Udp>() + size) as u16).into();
         self
     }
 }
@@ -23,5 +25,23 @@ impl Udp {
             length: 0.into(),
             crc: 0.into(),
         }
+    }
+}
+
+impl crate::StackableWith<crate::network::Ipv4> for Udp {
+    fn correct_checksum_with(mut self, size: usize, rhs: &crate::network::Ipv4) -> Self {
+        self.length = ((core::mem::size_of::<Udp>() + size) as u16).into();
+        self.crc = 0.into();
+
+        let header: &Udp = &self;
+        let size = header.length.to_native() as usize;
+        let pseudo_header = PseudoHeader::new(rhs);
+
+        self.crc = checksum::make_combine(&[
+            checksum::calculate(&pseudo_header),
+            checksum::calculate_with_len(header, size),
+        ]);
+
+        self
     }
 }

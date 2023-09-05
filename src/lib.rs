@@ -32,18 +32,35 @@ macro_rules! impl_stack {
                 core::mem::size_of::<Self>()
             }
 
-            unsafe fn write_stage1(&self, mem: *mut u8) {
+            unsafe fn write_stage1(&self, mem: core::ptr::NonNull<u8>) {
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         self,
-                        mem.cast::<Self>(),
+                        mem.as_ptr().cast::<Self>(),
                         core::mem::size_of::<Self>(),
                     );
                 }
             }
 
-            unsafe fn write_stage2(&self, $mem: *mut u8, $payload_len: usize) $code
+            unsafe fn write_stage2(&self, $mem: core::ptr::NonNull<u8>, $payload_len: usize) $code
         }
+    }
+}
+
+trait PointerExtension {
+    unsafe fn add(self, count: usize) -> Self;
+    unsafe fn sub(self, count: usize) -> Self;
+}
+
+impl<T> PointerExtension for NonNull<T> {
+    #[inline]
+    unsafe fn add(self, count: usize) -> Self {
+        NonNull::new_unchecked(self.as_ptr().add(count))
+    }
+
+    #[inline]
+    unsafe fn sub(self, count: usize) -> Self {
+        NonNull::new_unchecked(self.as_ptr().sub(count))
     }
 }
 
@@ -95,7 +112,7 @@ pub mod data_link {
     }
 
     crate::impl_stack!(@make Eth {
-        fn write_stage2(&self, mem: *mut u8, payload_len: usize) {}
+        fn write_stage2(&self, _mem: *mut u8, _payload_len: usize) {}
     });
 
     unsafe impl crate::IsSafeToWrite for Eth {}
@@ -176,7 +193,7 @@ pub mod network {
     crate::impl_stack!(@make Ipv4 {
         fn write_stage2(&self, mem: *mut u8, payload_len: usize) {
             use crate::checksum;
-            let ipv4 = unsafe { &mut *mem.cast::<Ipv4>() };
+            let ipv4 = unsafe { mem.cast::<Ipv4>().as_mut() };
 
             ipv4.length = (payload_len as u16).into();
             ipv4.hcrc = checksum::make(checksum::calculate(ipv4));
@@ -189,6 +206,7 @@ pub mod transport {
     use static_assertions::const_assert_eq;
 
     use crate::network::Ipv4;
+    use crate::PointerExtension;
 
     #[repr(C)]
     pub struct Udp {
@@ -228,8 +246,8 @@ pub mod transport {
         fn write_stage2(&self, mem: *mut u8, payload_len: usize) {
             use crate::checksum::{self, PseudoHeader};
 
-            let udp = unsafe { &mut *mem.cast::<Udp>() };
-            let ipv4 = unsafe { &*mem.cast::<Ipv4>().sub(1) };
+            let udp = unsafe { mem.cast::<Udp>().as_mut() };
+            let ipv4 = unsafe { mem.cast::<Ipv4>().sub(1).as_ref() };
             let pseudo_header = PseudoHeader::new(ipv4);
 
             udp.len = (payload_len as u16).into();
@@ -340,20 +358,20 @@ unsafe impl<const N: usize, T> crate::Protocol for [T; N] {
         core::mem::size_of::<Self>()
     }
 
-    unsafe fn write_stage1(&self, mem: *mut u8) {
+    unsafe fn write_stage1(&self, mem: NonNull<u8>) {
         unsafe {
-            core::ptr::copy_nonoverlapping(self.as_ptr(), mem.cast::<T>(), N);
+            core::ptr::copy_nonoverlapping(self.as_ptr(), mem.cast::<T>().as_ptr(), N);
         }
     }
 
-    unsafe fn write_stage2(&self, _mem: *mut u8, _payload_len: usize) {}
+    unsafe fn write_stage2(&self, _mem: NonNull<u8>, _payload_len: usize) {}
 }
 
 pub unsafe trait Protocol {
     /// Returns the write length in bytes.
     fn len(&self) -> usize;
-    unsafe fn write_stage1(&self, mem: *mut u8);
-    unsafe fn write_stage2(&self, mem: *mut u8, payload_len: usize);
+    unsafe fn write_stage1(&self, mem: NonNull<u8>);
+    unsafe fn write_stage2(&self, mem: NonNull<u8>, payload_len: usize);
 }
 
 unsafe trait StackingAnchor<U: Protocol>: Protocol {}
@@ -386,12 +404,12 @@ unsafe impl<U: Protocol, L: Protocol> Protocol for Stacked<U, L> {
         self.upper.len() + self.lower.len()
     }
 
-    unsafe fn write_stage1(&self, mem: *mut u8) {
+    unsafe fn write_stage1(&self, mem: NonNull<u8>) {
         self.upper.write_stage1(mem);
         self.lower.write_stage1(mem.add(self.upper.len()));
     }
 
-    unsafe fn write_stage2(&self, mem: *mut u8, payload_len: usize) {
+    unsafe fn write_stage2(&self, mem: NonNull<u8>, payload_len: usize) {
         let uplen = self.upper.len();
         let mem2 = mem.add(uplen);
 
@@ -435,8 +453,8 @@ impl<T: IsSafeToWrite> Packet<T> {
         };
 
         unsafe {
-            value.write_stage1(ptr.as_ptr());
-            value.write_stage2(ptr.as_ptr(), total_size);
+            value.write_stage1(ptr);
+            value.write_stage2(ptr, total_size);
         }
 
         Packet {

@@ -42,7 +42,7 @@ macro_rules! impl_stack {
                     core::ptr::copy_nonoverlapping(
                         self,
                         mem.as_ptr().cast::<Self>(),
-                        core::mem::size_of::<Self>(),
+                        1,
                     );
                 }
             }
@@ -215,9 +215,29 @@ impl<T: IsSafeToWrite> Drop for Packet<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::data_link::{Eth, MacAddr};
+    use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
+    use super::transport::Udp;
+    use super::Packet;
+
     #[test]
     fn ui() {
         let t = trybuild::TestCases::new();
         t.compile_fail("tests/ui/*.rs");
+    }
+
+    #[test]
+    fn network_stack() {
+        const RAW_PACKET: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 69, 0, 0, 32, 0, 0, 0, 0, 64, 17, 122, 206,
+            255, 255, 255, 255, 255, 255, 255, 255, 31, 144, 0, 80, 0, 12, 85, 108, 69, 69, 69, 69,
+        ];
+
+        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, crate::data_link::Type::Ip);
+        let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Udp);
+        let udp = Udp::new(8080, 80);
+
+        let packet = Packet::new(eth / ip / udp / [69u8; 4]);
+        assert_eq!(packet.as_bytes(), RAW_PACKET);
     }
 }

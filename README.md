@@ -55,3 +55,5 @@ let packet: Stacked<Stacked<Ethernet, Ipv4>, Udp> = eth << ip << udp;
 ///      same applys for TCP.
 ```
 
+## API v420
+Same as v69 but with unsafery magic to make the checksum calculation work and also the assembly generated is BEAUTIFUL.

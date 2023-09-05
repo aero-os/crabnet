@@ -1,5 +1,3 @@
-#![feature(new_uninit)]
-
 extern crate alloc;
 
 use core::alloc::Layout;

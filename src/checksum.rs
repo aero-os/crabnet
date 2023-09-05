@@ -26,12 +26,8 @@ impl PseudoHeader {
 
 /// Compute the 32-bit internet checksum for `data`.
 fn calculate_checksum(data: &[u8]) -> u32 {
-    let bytes = unsafe {
-        core::slice::from_raw_parts(
-            data.as_ptr() as *const BigEndian<u16>,
-            data.len() / core::mem::size_of::<u16>(),
-        )
-    };
+    let (head, bytes, tail) = unsafe { data.align_to::<BigEndian<u16>>() };
+    assert!(head.is_empty() && tail.is_empty(), "unaligned data");
 
     let mut sum = bytes
         .iter()

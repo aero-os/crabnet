@@ -7,3 +7,6 @@ authors = ["Anhad Singh <andypython@protonmail.com"]
 [dependencies]
 byte_endian = { git = "https://github.com/aero-os/byte_endian" }
 static_assertions = "1.1.0"
+
+[dev-dependencies]
+trybuild = "1.0"

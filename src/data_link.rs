@@ -49,5 +49,5 @@ impl<U: Protocol> Stack<U> for Eth {
 }
 
 crate::impl_stack!(@make Eth {
-    fn write_stage2(&self, _mem: *mut u8, _payload_len: usize) {}
+    fn write_stage2(&self, _mem: NonNull<u8>, _payload_len: usize) {}
 });

@@ -73,7 +73,7 @@ impl<U: Protocol> Stack<U> for Ipv4 {
 }
 
 crate::impl_stack!(@make Ipv4 {
-    fn write_stage2(&self, mem: *mut u8, payload_len: usize) {
+    fn write_stage2(&self, mem: NonNull<u8>, payload_len: usize) {
         use crate::checksum;
         let ipv4 = unsafe { mem.cast::<Ipv4>().as_mut() };
 

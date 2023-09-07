@@ -8,6 +8,7 @@ authors = [
 ]
 
 [dependencies]
+bit_field = "0.10.2"
 byte_endian = { git = "https://github.com/aero-os/byte_endian" }
 static_assertions = "1.1.0"
 

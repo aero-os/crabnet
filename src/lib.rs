@@ -18,7 +18,7 @@ pub mod transport;
 #[macro_export]
 macro_rules! impl_stack {
     (@make $name:ty {
-        fn write_stage2(&self, $mem:ident: *mut u8, $payload_len:ident: usize) $code:block
+        fn write_stage2(&self, $mem:ident: NonNull<u8>, $payload_len:ident: usize) $code:block
     }) => {
         impl<L: $crate::Stack<$name>> core::ops::Div<L> for $name {
             type Output = L::Output;
@@ -215,7 +215,7 @@ impl<T: IsSafeToWrite> Drop for Packet<T> {
 mod tests {
     use super::data_link::{Eth, MacAddr};
     use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
-    use super::transport::Udp;
+    use super::transport::{Tcp, Udp};
     use super::Packet;
 
     #[test]
@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn network_stack() {
+    fn udp_stack() {
         const RAW_PACKET: &[u8] = &[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 69, 0, 0, 32, 0, 0, 0, 0, 64, 17, 122, 206,
             255, 255, 255, 255, 255, 255, 255, 255, 31, 144, 0, 80, 0, 12, 85, 108, 69, 69, 69, 69,
@@ -236,6 +236,22 @@ mod tests {
         let udp = Udp::new(8080, 80);
 
         let packet = Packet::new(eth / ip / udp / [69u8; 4]);
+        assert_eq!(packet.as_bytes(), RAW_PACKET);
+    }
+
+    #[test]
+    fn tcp_stack() {
+        const RAW_PACKET: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 69, 0, 0, 44, 0, 0, 0, 0, 64, 6, 122, 205,
+            255, 255, 255, 255, 255, 255, 255, 255, 31, 144, 0, 80, 0, 0, 0, 0, 0, 0, 0, 0, 80, 0,
+            0, 0, 5, 119, 0, 0, 69, 69, 69, 69,
+        ];
+
+        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, crate::data_link::Type::Ip);
+        let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Tcp);
+        let tcp = Tcp::new(8080, 80);
+
+        let packet = Packet::new(eth / ip / tcp / [69u8; 4]);
         assert_eq!(packet.as_bytes(), RAW_PACKET);
     }
 }

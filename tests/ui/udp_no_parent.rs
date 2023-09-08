@@ -1,10 +1,10 @@
 use netstack::transport::Udp;
-use netstack::Packet;
+use netstack::IntoBoxedBytes;
 
 fn main() {
     let x = Udp::new(8080, 80) / [69u8; 4];
-    let p = Packet::new(x);
+    let p = x.into_boxed_bytes();
 
     let x = Udp::new(8080, 80);
-    let p = Packet::new(x);
+    let p = x.into_boxed_bytes();
 }

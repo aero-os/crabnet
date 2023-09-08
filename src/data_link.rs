@@ -34,15 +34,18 @@ impl Eth {
 }
 
 unsafe impl StackingAnchor<Eth> for Eth {}
-unsafe impl<U: Protocol> StackingAnchor<Eth> for Stacked<U, Eth> {}
+unsafe impl<'a, U: Protocol> StackingAnchor<Eth> for Stacked<'a, U, Eth> {}
 unsafe impl IsSafeToWrite for Eth {}
 
-impl<U: Protocol> Stack<U> for Eth {
-    type Output = Stacked<U, Self>;
+impl<U: Protocol> Stack<U> for Eth
+where
+    U: 'static,
+{
+    type Output = Stacked<'static, U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: lhs,
+            upper: crate::MaybeOwned::Owned(lhs),
             lower: self,
         }
     }

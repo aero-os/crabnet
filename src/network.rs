@@ -56,17 +56,26 @@ impl Ipv4 {
             dest_ip,
         }
     }
+
+    #[inline]
+    pub fn payload_len(&self) -> u16 {
+        let total_length: u16 = self.length.into();
+        total_length - (core::mem::size_of::<Self>() as u16)
+    }
 }
 
 unsafe impl StackingAnchor<Ipv4> for Ipv4 {}
-unsafe impl<U: Protocol> StackingAnchor<Ipv4> for Stacked<U, Ipv4> {}
+unsafe impl<'a, U: Protocol> StackingAnchor<Ipv4> for Stacked<'a, U, Ipv4> {}
 
-impl<U: Protocol> Stack<U> for Ipv4 {
-    type Output = Stacked<U, Self>;
+impl<U: Protocol> Stack<U> for Ipv4
+where
+    U: 'static,
+{
+    type Output = Stacked<'static, U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: lhs,
+            upper: crate::MaybeOwned::Owned(lhs),
             lower: self,
         }
     }

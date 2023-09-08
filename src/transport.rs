@@ -27,14 +27,17 @@ impl Udp {
 const_assert_eq!(core::mem::size_of::<Udp>(), 8);
 
 unsafe impl StackingAnchor<Udp> for Udp {}
-unsafe impl<U: Protocol> StackingAnchor<Udp> for Stacked<U, Udp> {}
+unsafe impl<'a, U: Protocol> StackingAnchor<Udp> for Stacked<'a, U, Udp> {}
 
-impl<U: StackingAnchor<Ipv4>> Stack<U> for Udp {
-    type Output = Stacked<U, Self>;
+impl<U: StackingAnchor<Ipv4>> Stack<U> for Udp
+where
+    U: 'static,
+{
+    type Output = Stacked<'static, U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: lhs,
+            upper: crate::MaybeOwned::Owned(lhs),
             lower: self,
         }
     }
@@ -83,17 +86,79 @@ impl Tcp {
             urgent_ptr: 0.into(),
         }
     }
+
+    #[inline]
+    pub fn sequence_number(&self) -> u32 {
+        self.seq_nr.to_native()
+    }
+
+    #[inline]
+    pub fn set_sequence_number(mut self, value: u32) -> Self {
+        self.seq_nr = value.into();
+        self
+    }
+
+    #[inline]
+    pub fn set_window(mut self, value: u16) -> Self {
+        self.window = value.into();
+        self
+    }
+
+    #[inline]
+    pub fn flags(&self) -> TcpFlags {
+        let raw = self.flags.to_native().get_bits(0..=5);
+        TcpFlags::from_bits_truncate(raw)
+    }
+
+    #[inline]
+    pub fn set_flags(mut self, value: TcpFlags) -> Self {
+        let mut flags = self.flags.to_native();
+        flags.set_bits(0..=5, value.bits());
+
+        self.flags = flags.into();
+        self
+    }
+
+    /// Sets the ACK number to `value` and sets the [`TcpFlags::ACK`] flag.
+    #[inline]
+    pub fn set_ack_number(mut self, value: u32) -> Self {
+        self.ack_nr = value.into();
+
+        let mut flags = self.flags();
+        flags.insert(TcpFlags::ACK);
+        self.set_flags(flags)
+    }
+}
+
+impl<'a, T: Protocol, U: Protocol> Stacked<'a, Stacked<'a, Stacked<'a, T, Ipv4>, Tcp>, U> {
+    pub fn ack_len(&self) -> u32 {
+        let tcp = &self.upper.as_ref().lower;
+        let ipv4 = &self.upper.as_ref().upper.as_ref().lower;
+
+        let data_len = ipv4.payload_len() as u32;
+        let flags = tcp.flags();
+
+        let mut addend = 0;
+        if flags.contains(TcpFlags::FIN) | flags.contains(TcpFlags::SYN) {
+            addend = 1;
+        }
+
+        data_len + addend
+    }
 }
 
 unsafe impl StackingAnchor<Tcp> for Tcp {}
-unsafe impl<U: Protocol> StackingAnchor<Udp> for Stacked<U, Tcp> {}
+unsafe impl<'a, U: Protocol> StackingAnchor<Udp> for Stacked<'a, U, Tcp> {}
 
-impl<U: StackingAnchor<Ipv4>> Stack<U> for Tcp {
-    type Output = Stacked<U, Self>;
+impl<U: StackingAnchor<Ipv4>> Stack<U> for Tcp
+where
+    U: 'static,
+{
+    type Output = Stacked<'static, U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: lhs,
+            upper: crate::MaybeOwned::Owned(lhs),
             lower: self,
         }
     }
@@ -110,3 +175,14 @@ crate::impl_stack!(@make Tcp {
         tcp.checksum = checksum::make_combine(&[checksum::calculate(&pseudo_header), checksum::calculate_with_len(tcp, payload_len)]);
     }
 });
+
+bitflags::bitflags! {
+    pub struct TcpFlags: u16 {
+        const FIN = 1 << 0;
+        const SYN = 1 << 1;
+        const RST = 1 << 2;
+        const PSH = 1 << 3;
+        const ACK = 1 << 4;
+        const URG = 1 << 5;
+    }
+}

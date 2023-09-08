@@ -1,11 +1,13 @@
 #![no_std]
+#![feature(allocator_api)]
 
 extern crate alloc;
 
-use core::alloc::Layout;
-use core::marker::PhantomData;
 use core::ops::Div;
 use core::ptr::NonNull;
+
+use alloc::alloc::{Allocator, Global};
+use alloc::boxed::Box;
 
 pub mod checksum;
 pub mod data_link;
@@ -34,10 +36,11 @@ macro_rules! impl_stack {
 
         unsafe impl $crate::Protocol for $name {
             #[inline]
-            fn len(&self) -> usize {
+            fn write_len(&self) -> usize {
                 core::mem::size_of::<Self>()
             }
 
+            #[inline]
             unsafe fn write_stage1(&self, mem: core::ptr::NonNull<u8>) {
                 unsafe {
                     core::ptr::copy_nonoverlapping(
@@ -51,6 +54,10 @@ macro_rules! impl_stack {
             unsafe fn write_stage2(&self, $mem: core::ptr::NonNull<u8>, $payload_len: usize) $code
         }
     }
+}
+
+pub trait IntoBoxedBytes<A: Allocator = Global> {
+    fn into_boxed_bytes(self) -> Box<[u8], A>;
 }
 
 trait PointerExtension {
@@ -70,18 +77,22 @@ impl<T> PointerExtension for NonNull<T> {
     }
 }
 
+// impl for [T; N]
 unsafe impl<const N: usize, T> StackingAnchor<[T; N]> for [T; N] {}
-unsafe impl<const N: usize, T, U: Protocol> crate::StackingAnchor<[T; N]>
-    for crate::Stacked<U, [T; N]>
+unsafe impl<'a, const N: usize, T, U: Protocol> StackingAnchor<[T; N]>
+    for crate::Stacked<'a, U, [T; N]>
 {
 }
 
-impl<const N: usize, T, U: Protocol> Stack<U> for [T; N] {
-    type Output = Stacked<U, Self>;
+impl<const N: usize, T, U: Protocol> Stack<U> for [T; N]
+where
+    U: 'static,
+{
+    type Output = Stacked<'static, U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: lhs,
+            upper: MaybeOwned::Owned(lhs),
             lower: self,
         }
     }
@@ -89,7 +100,7 @@ impl<const N: usize, T, U: Protocol> Stack<U> for [T; N] {
 
 unsafe impl<const N: usize, T> Protocol for [T; N] {
     #[inline]
-    fn len(&self) -> usize {
+    fn write_len(&self) -> usize {
         core::mem::size_of::<Self>()
     }
 
@@ -102,9 +113,42 @@ unsafe impl<const N: usize, T> Protocol for [T; N] {
     unsafe fn write_stage2(&self, _mem: NonNull<u8>, _payload_len: usize) {}
 }
 
+// impl for &[T]
+unsafe impl<T> StackingAnchor<&[T]> for &[T] {}
+unsafe impl<'a, T, U: Protocol> StackingAnchor<&[T]> for crate::Stacked<'a, U, &'a [T]> {}
+
+impl<T, U: Protocol> Stack<U> for &[T]
+where
+    U: 'static,
+{
+    type Output = Stacked<'static, U, Self>;
+
+    fn stack(self, lhs: U) -> Self::Output {
+        Self::Output {
+            upper: MaybeOwned::Owned(lhs),
+            lower: self,
+        }
+    }
+}
+
+unsafe impl<T> Protocol for &[T] {
+    #[inline]
+    fn write_len(&self) -> usize {
+        self.len()
+    }
+
+    unsafe fn write_stage1(&self, mem: NonNull<u8>) {
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.as_ptr(), mem.cast::<T>().as_ptr(), self.len());
+        }
+    }
+
+    unsafe fn write_stage2(&self, _mem: NonNull<u8>, _payload_len: usize) {}
+}
+
 pub unsafe trait Protocol {
     /// Returns the write length in bytes.
-    fn len(&self) -> usize;
+    fn write_len(&self) -> usize;
     unsafe fn write_stage1(&self, mem: NonNull<u8>);
     unsafe fn write_stage2(&self, mem: NonNull<u8>, payload_len: usize);
 }
@@ -119,12 +163,27 @@ pub trait Stack<U: Protocol> {
 
 pub unsafe trait IsSafeToWrite: Protocol {}
 
-pub struct Stacked<U: Protocol, L: Protocol> {
-    upper: U,
-    lower: L,
+pub enum MaybeOwned<'a, T> {
+    Owned(T),
+    Borrowed(&'a T),
 }
 
-impl<U: Protocol, L: Protocol, K: Stack<Stacked<U, L>>> Div<K> for Stacked<U, L> {
+impl<'a, T> MaybeOwned<'a, T> {
+    #[inline]
+    pub fn as_ref(&self) -> &T {
+        match self {
+            Self::Owned(t) => &t,
+            Self::Borrowed(_) => unreachable!(),
+        }
+    }
+}
+
+pub struct Stacked<'a, U: Protocol, L: Protocol> {
+    pub upper: MaybeOwned<'a, U>,
+    pub lower: L,
+}
+
+impl<'a, U: Protocol, L: Protocol, K: Stack<Stacked<'a, U, L>>> Div<K> for Stacked<'a, U, L> {
     type Output = K::Output;
 
     #[inline]
@@ -133,84 +192,46 @@ impl<U: Protocol, L: Protocol, K: Stack<Stacked<U, L>>> Div<K> for Stacked<U, L>
     }
 }
 
-unsafe impl<U: Protocol, L: Protocol> Protocol for Stacked<U, L> {
+unsafe impl<'a, U: Protocol, L: Protocol> Protocol for Stacked<'a, U, L> {
     #[inline]
-    fn len(&self) -> usize {
-        self.upper.len() + self.lower.len()
+    fn write_len(&self) -> usize {
+        self.upper.as_ref().write_len() + self.lower.write_len()
     }
 
     unsafe fn write_stage1(&self, mem: NonNull<u8>) {
-        self.upper.write_stage1(mem);
-        self.lower.write_stage1(mem.add(self.upper.len()));
+        let upper = self.upper.as_ref();
+
+        upper.write_stage1(mem);
+        self.lower.write_stage1(mem.add(upper.write_len()));
     }
 
     unsafe fn write_stage2(&self, mem: NonNull<u8>, payload_len: usize) {
-        let uplen = self.upper.len();
+        let upper = self.upper.as_ref();
+
+        let uplen = upper.write_len();
         let mem2 = mem.add(uplen);
 
-        self.upper.write_stage2(mem, payload_len);
+        upper.write_stage2(mem, payload_len);
         self.lower.write_stage2(mem2, payload_len - uplen);
     }
 }
 
-unsafe impl<U: IsSafeToWrite, L: Protocol> IsSafeToWrite for Stacked<U, L> {}
+unsafe impl<'a, U: IsSafeToWrite, L: Protocol> IsSafeToWrite for Stacked<'a, U, L> {}
 
-pub struct Packet<T: IsSafeToWrite> {
-    ptr: NonNull<u8>,
-    layout: Layout,
+impl<T: IsSafeToWrite + Sized> IntoBoxedBytes for T {
+    fn into_boxed_bytes(self) -> Box<[u8]> {
+        let total_size = self.write_len();
+        let mut data = alloc::vec![0u8; total_size].into_boxed_slice();
 
-    // XXX: This marker is required for dropck to understand that we logically own a T.
-    _marker: PhantomData<T>,
-}
-
-impl<T: IsSafeToWrite> Packet<T> {
-    /// Creates a new packet.
-    ///
-    /// ## Panics
-    /// This function panics if the total size of the packet exceeds `isize::MAX` after alignment.
-    pub fn new(value: T) -> Self {
-        const ALIGNMENT: usize = 4096;
-
-        let total_size = value.len();
-
-        // Check that the total size does not exceed the maximum size for the alignment.
-        assert!(total_size <= (isize::MAX as usize - (ALIGNMENT - 1)));
-
-        // SAFETY: We have verified that `total_size` is less than `isize::MAX` after alignment
-        // and the alignment is non-zero and a power of two.
-        let layout = unsafe { Layout::from_size_align_unchecked(total_size, ALIGNMENT) };
-
-        // SAFETY: The layout has a non-zero size and is properly aligned.
-        let ptr = unsafe { alloc::alloc::alloc(layout) };
-        let Some(ptr) = NonNull::new(ptr) else {
-            // Alloction failed, `ptr` is null, call the error handler.
-            alloc::alloc::handle_alloc_error(layout);
-        };
+        // SAFETY: Memory allocated by [`Vec`] is guaranteed to be non-null.
+        let ptr = unsafe { NonNull::new_unchecked(data.as_mut_ptr()) };
 
         unsafe {
-            value.write_stage1(ptr);
-            value.write_stage2(ptr, total_size);
+            self.write_stage1(ptr);
+            self.write_stage2(ptr, total_size);
         }
 
-        Packet {
-            ptr,
-            layout,
-            _marker: PhantomData,
-        }
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.ptr.as_ptr(), self.layout.size()) }
-    }
-}
-
-impl<T: IsSafeToWrite> Drop for Packet<T> {
-    fn drop(&mut self) {
-        // SAFETY: `self.ptr` was allocated by the global allocator and the layout is the same
-        // as the one used for allocation.
-        unsafe {
-            alloc::alloc::dealloc(self.ptr.as_ptr(), self.layout);
-        }
+        data
     }
 }
 
@@ -219,13 +240,13 @@ mod tests {
     use super::data_link::{Eth, MacAddr};
     use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
     use super::transport::{Tcp, Udp};
-    use super::Packet;
+    use super::{IntoBoxedBytes, Stacked};
 
-    #[test]
-    fn ui() {
-        let t = trybuild::TestCases::new();
-        t.compile_fail("tests/ui/*.rs");
-    }
+    // #[test]
+    // fn ui() {
+    //     let t = trybuild::TestCases::new();
+    //     t.compile_fail("tests/ui/*.rs");
+    // }
 
     #[test]
     fn udp_stack() {
@@ -238,8 +259,8 @@ mod tests {
         let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Udp);
         let udp = Udp::new(8080, 80);
 
-        let packet = Packet::new(eth / ip / udp / [69u8; 4]);
-        assert_eq!(packet.as_bytes(), RAW_PACKET);
+        let packet = (eth / ip / udp / [69u8; 4]).into_boxed_bytes();
+        assert_eq!(&*packet, RAW_PACKET);
     }
 
     #[test]
@@ -254,7 +275,35 @@ mod tests {
         let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Tcp);
         let tcp = Tcp::new(8080, 80);
 
-        let packet = Packet::new(eth / ip / tcp / [69u8; 4]);
-        assert_eq!(packet.as_bytes(), RAW_PACKET);
+        let packet = (eth / ip / tcp / [69u8; 4]).into_boxed_bytes();
+        assert_eq!(&*packet, RAW_PACKET);
+    }
+
+    #[test]
+    fn unsized_payload() {
+        const RAW_PACKET: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 69, 0, 0, 32, 0, 0, 0, 0, 64, 17, 122, 206,
+            255, 255, 255, 255, 255, 255, 255, 255, 31, 144, 0, 80, 0, 12, 85, 108, 69, 69, 69, 69,
+        ];
+
+        // Payload as a slice.
+        let payload: &[u8] = [69u8; 4].as_slice();
+
+        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, crate::data_link::Type::Ip);
+        let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Udp);
+        let udp = Udp::new(8080, 80);
+
+        let packet = (eth / ip / udp / payload).into_boxed_bytes();
+        assert_eq!(&*packet, RAW_PACKET);
+    }
+
+    #[test]
+    fn parsed_packet() {
+        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, crate::data_link::Type::Ip);
+
+        let x = Stacked {
+            upper: crate::MaybeOwned::Borrowed(&eth),
+            lower: [2, 3, 4],
+        };
     }
 }

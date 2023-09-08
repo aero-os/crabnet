@@ -1,71 +1,51 @@
-error[E0277]: the trait bound `netstack::transport::Udp: IsSafeToWrite` is not satisfied
- --> tests/ui/udp_no_parent.rs:6:25
+error[E0599]: the method `into_boxed_bytes` exists for struct `Stacked<Udp, [u8; 4]>`, but its trait bounds were not satisfied
+ --> tests/ui/udp_no_parent.rs:6:15
   |
-6 |     let p = Packet::new(x);
-  |             ----------- ^ the trait `IsSafeToWrite` is not implemented for `netstack::transport::Udp`
-  |             |
-  |             required by a bound introduced by this call
+6 |     let p = x.into_boxed_bytes();
+  |               ^^^^^^^^^^^^^^^^ method cannot be called on `Stacked<Udp, [u8; 4]>` due to unsatisfied trait bounds
   |
-  = help: the following other types implement trait `IsSafeToWrite`:
-            Eth
-            Stacked<U, L>
-  = note: required for `Stacked<netstack::transport::Udp, [u8; 4]>` to implement `IsSafeToWrite`
-note: required by a bound in `Packet::<T>::new`
- --> src/lib.rs
+ ::: src/lib.rs
   |
-  | impl<T: IsSafeToWrite> Packet<T> {
-  |         ^^^^^^^^^^^^^ required by this bound in `Packet::<T>::new`
-...
-  |     pub fn new(value: T) -> Self {
-  |            --- required by a bound in this associated function
+  | pub struct Stacked<U: Protocol, L: Protocol> {
+  | --------------------------------------------
+  | |
+  | doesn't satisfy `_: IntoBoxedBytes`
+  | doesn't satisfy `_: IsSafeToWrite`
+  |
+  = note: the following trait bounds were not satisfied:
+          `Stacked<netstack::transport::Udp, [u8; 4]>: IsSafeToWrite`
+          which is required by `Stacked<netstack::transport::Udp, [u8; 4]>: IntoBoxedBytes`
+          `&Stacked<netstack::transport::Udp, [u8; 4]>: IsSafeToWrite`
+          which is required by `&Stacked<netstack::transport::Udp, [u8; 4]>: IntoBoxedBytes`
+          `&mut Stacked<netstack::transport::Udp, [u8; 4]>: IsSafeToWrite`
+          which is required by `&mut Stacked<netstack::transport::Udp, [u8; 4]>: IntoBoxedBytes`
 
-error[E0277]: the trait bound `netstack::transport::Udp: IsSafeToWrite` is not satisfied
- --> tests/ui/udp_no_parent.rs:6:13
+error[E0599]: the method `into_boxed_bytes` exists for struct `Udp`, but its trait bounds were not satisfied
+ --> tests/ui/udp_no_parent.rs:9:15
   |
-6 |     let p = Packet::new(x);
-  |             ^^^^^^^^^^^^^^ the trait `IsSafeToWrite` is not implemented for `netstack::transport::Udp`
+9 |     let p = x.into_boxed_bytes();
+  |               ^^^^^^^^^^^^^^^^ method cannot be called on `Udp` due to unsatisfied trait bounds
   |
-  = help: the following other types implement trait `IsSafeToWrite`:
-            Eth
-            Stacked<U, L>
-  = note: required for `Stacked<netstack::transport::Udp, [u8; 4]>` to implement `IsSafeToWrite`
-note: required by a bound in `Packet`
- --> src/lib.rs
+ ::: src/transport.rs
   |
-  | pub struct Packet<T: IsSafeToWrite> {
-  |                      ^^^^^^^^^^^^^ required by this bound in `Packet`
+  | pub struct Udp {
+  | --------------
+  | |
+  | doesn't satisfy `netstack::transport::Udp: IntoBoxedBytes`
+  | doesn't satisfy `netstack::transport::Udp: IsSafeToWrite`
+  |
+  = note: the following trait bounds were not satisfied:
+          `netstack::transport::Udp: IsSafeToWrite`
+          which is required by `netstack::transport::Udp: IntoBoxedBytes`
+          `&netstack::transport::Udp: IsSafeToWrite`
+          which is required by `&netstack::transport::Udp: IntoBoxedBytes`
+          `&mut netstack::transport::Udp: IsSafeToWrite`
+          which is required by `&mut netstack::transport::Udp: IntoBoxedBytes`
 
-error[E0277]: the trait bound `netstack::transport::Udp: IsSafeToWrite` is not satisfied
- --> tests/ui/udp_no_parent.rs:9:25
+warning: unused import: `netstack::IntoBoxedBytes`
+ --> tests/ui/udp_no_parent.rs:2:5
   |
-9 |     let p = Packet::new(x);
-  |             ----------- ^ the trait `IsSafeToWrite` is not implemented for `netstack::transport::Udp`
-  |             |
-  |             required by a bound introduced by this call
+2 | use netstack::IntoBoxedBytes;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = help: the following other types implement trait `IsSafeToWrite`:
-            Eth
-            Stacked<U, L>
-note: required by a bound in `Packet::<T>::new`
- --> src/lib.rs
-  |
-  | impl<T: IsSafeToWrite> Packet<T> {
-  |         ^^^^^^^^^^^^^ required by this bound in `Packet::<T>::new`
-...
-  |     pub fn new(value: T) -> Self {
-  |            --- required by a bound in this associated function
-
-error[E0277]: the trait bound `netstack::transport::Udp: IsSafeToWrite` is not satisfied
- --> tests/ui/udp_no_parent.rs:9:13
-  |
-9 |     let p = Packet::new(x);
-  |             ^^^^^^^^^^^^^^ the trait `IsSafeToWrite` is not implemented for `netstack::transport::Udp`
-  |
-  = help: the following other types implement trait `IsSafeToWrite`:
-            Eth
-            Stacked<U, L>
-note: required by a bound in `Packet`
- --> src/lib.rs
-  |
-  | pub struct Packet<T: IsSafeToWrite> {
-  |                      ^^^^^^^^^^^^^ required by this bound in `Packet`
+  = note: `#[warn(unused_imports)]` on by default

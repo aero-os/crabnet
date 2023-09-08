@@ -14,6 +14,7 @@ pub mod transport;
 //
 // U: Upper
 // L: Lower
+// K: Much Lower
 
 #[macro_export]
 macro_rules! impl_stack {
@@ -121,11 +122,11 @@ pub struct Stacked<U: Protocol, L: Protocol> {
     lower: L,
 }
 
-impl<U: Protocol, L: Protocol, MuchLower: Stack<Stacked<U, L>>> Div<MuchLower> for Stacked<U, L> {
-    type Output = MuchLower::Output;
+impl<U: Protocol, L: Protocol, K: Stack<Stacked<U, L>>> Div<K> for Stacked<U, L> {
+    type Output = K::Output;
 
     #[inline]
-    fn div(self, rhs: MuchLower) -> Self::Output {
+    fn div(self, rhs: K) -> Self::Output {
         rhs.stack(self)
     }
 }

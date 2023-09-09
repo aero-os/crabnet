@@ -295,14 +295,26 @@ mod tests {
 
     #[test]
     fn packet_parse() {
+        use crate::PacketParser;
+
         const RAW_PACKET: &[u8] = &[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 69, 0, 0, 32, 0, 0, 0, 0, 64, 17, 122, 206,
             255, 255, 255, 255, 255, 255, 255, 255, 31, 144, 0, 80, 0, 12, 85, 108, 69, 69, 69, 69,
         ];
 
-        let mut packet_parser = crate::PacketParser::new(&RAW_PACKET);
+        let mut packet_parser = PacketParser::new(&RAW_PACKET);
         let eth = packet_parser.next::<Eth>();
+        assert_eq!(eth.src_mac, MacAddr::NULL);
+        assert_eq!(eth.dest_mac, MacAddr::NULL);
+        assert_eq!(eth.typ, crate::data_link::Type::Ip);
+
         let ip = packet_parser.next::<Ipv4>();
+        assert_eq!(ip.src_ip, Ipv4Addr::BROADCAST);
+        assert_eq!(ip.dest_ip, Ipv4Addr::BROADCAST);
+        assert_eq!(ip.protocol, Ipv4Type::Udp);
+
         let udp = packet_parser.next::<Udp>();
+        assert_eq!(udp.src_port, 8080.into());
+        assert_eq!(udp.dst_port, 80.into());
     }
 }

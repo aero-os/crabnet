@@ -18,7 +18,7 @@ impl Ipv4Addr {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u8)]
 pub enum Ipv4Type {
     Tcp = 6u8.swap_bytes(),

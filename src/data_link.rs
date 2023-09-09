@@ -10,6 +10,7 @@ impl MacAddr {
     pub const NULL: Self = Self([0; Self::ADDR_SIZE]);
 }
 
+#[derive(Debug, PartialEq)]
 #[repr(u16)]
 pub enum Type {
     Ip = 0x800u16.swap_bytes(),

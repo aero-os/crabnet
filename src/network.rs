@@ -65,17 +65,14 @@ impl Ipv4 {
 }
 
 unsafe impl StackingAnchor<Ipv4> for Ipv4 {}
-unsafe impl<'a, U: Protocol> StackingAnchor<Ipv4> for Stacked<'a, U, Ipv4> {}
+unsafe impl<U: Protocol> StackingAnchor<Ipv4> for Stacked<U, Ipv4> {}
 
-impl<U: Protocol> Stack<U> for Ipv4
-where
-    U: 'static,
-{
-    type Output = Stacked<'static, U, Self>;
+impl<U: Protocol> Stack<U> for Ipv4 {
+    type Output = Stacked<U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: crate::MaybeOwned::Owned(lhs),
+            upper: lhs,
             lower: self,
         }
     }

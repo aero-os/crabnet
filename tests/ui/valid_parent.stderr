@@ -1,9 +1,9 @@
-error[E0277]: the trait bound `Eth: netstack::StackingAnchor<Ipv4>` is not satisfied
+error[E0277]: the trait bound `Eth: StackingAnchor<Ipv4>` is not satisfied
  --> tests/ui/valid_parent.rs:8:17
   |
 8 |     let x = eth / udp;
-  |                 ^ the trait `netstack::StackingAnchor<Ipv4>` is not implemented for `Eth`
+  |                 ^ the trait `StackingAnchor<Ipv4>` is not implemented for `Eth`
   |
-  = help: the trait `netstack::StackingAnchor<Eth>` is implemented for `Eth`
+  = help: the trait `StackingAnchor<Eth>` is implemented for `Eth`
   = note: required for `netstack::transport::Udp` to implement `Stack<Eth>`
   = note: required for `Eth` to implement `Div<netstack::transport::Udp>`

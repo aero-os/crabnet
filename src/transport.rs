@@ -27,17 +27,14 @@ impl Udp {
 const_assert_eq!(core::mem::size_of::<Udp>(), 8);
 
 unsafe impl StackingAnchor<Udp> for Udp {}
-unsafe impl<'a, U: Protocol> StackingAnchor<Udp> for Stacked<'a, U, Udp> {}
+unsafe impl<U: Protocol> StackingAnchor<Udp> for Stacked<U, Udp> {}
 
-impl<U: StackingAnchor<Ipv4>> Stack<U> for Udp
-where
-    U: 'static,
-{
-    type Output = Stacked<'static, U, Self>;
+impl<U: StackingAnchor<Ipv4>> Stack<U> for Udp {
+    type Output = Stacked<U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: crate::MaybeOwned::Owned(lhs),
+            upper: lhs,
             lower: self,
         }
     }
@@ -130,10 +127,10 @@ impl Tcp {
     }
 }
 
-impl<'a, T: Protocol, U: Protocol> Stacked<'a, Stacked<'a, Stacked<'a, T, Ipv4>, Tcp>, U> {
+impl<T: Protocol, U: Protocol> Stacked<Stacked<Stacked<T, Ipv4>, Tcp>, U> {
     pub fn ack_len(&self) -> u32 {
-        let tcp = &self.upper.as_ref().lower;
-        let ipv4 = &self.upper.as_ref().upper.as_ref().lower;
+        let tcp = &self.upper.lower;
+        let ipv4 = &self.upper.upper.lower;
 
         let data_len = ipv4.payload_len() as u32;
         let flags = tcp.flags();
@@ -148,17 +145,14 @@ impl<'a, T: Protocol, U: Protocol> Stacked<'a, Stacked<'a, Stacked<'a, T, Ipv4>,
 }
 
 unsafe impl StackingAnchor<Tcp> for Tcp {}
-unsafe impl<'a, U: Protocol> StackingAnchor<Udp> for Stacked<'a, U, Tcp> {}
+unsafe impl<U: Protocol> StackingAnchor<Udp> for Stacked<U, Tcp> {}
 
-impl<U: StackingAnchor<Ipv4>> Stack<U> for Tcp
-where
-    U: 'static,
-{
-    type Output = Stacked<'static, U, Self>;
+impl<U: StackingAnchor<Ipv4>> Stack<U> for Tcp {
+    type Output = Stacked<U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: crate::MaybeOwned::Owned(lhs),
+            upper: lhs,
             lower: self,
         }
     }

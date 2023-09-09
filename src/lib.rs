@@ -79,20 +79,14 @@ impl<T> PointerExtension for NonNull<T> {
 
 // impl for [T; N]
 unsafe impl<const N: usize, T> StackingAnchor<[T; N]> for [T; N] {}
-unsafe impl<'a, const N: usize, T, U: Protocol> StackingAnchor<[T; N]>
-    for crate::Stacked<'a, U, [T; N]>
-{
-}
+unsafe impl<const N: usize, T, U: Protocol> StackingAnchor<[T; N]> for crate::Stacked<U, [T; N]> {}
 
-impl<const N: usize, T, U: Protocol> Stack<U> for [T; N]
-where
-    U: 'static,
-{
-    type Output = Stacked<'static, U, Self>;
+impl<const N: usize, T, U: Protocol> Stack<U> for [T; N] {
+    type Output = Stacked<U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: MaybeOwned::Owned(lhs),
+            upper: lhs,
             lower: self,
         }
     }
@@ -115,17 +109,14 @@ unsafe impl<const N: usize, T> Protocol for [T; N] {
 
 // impl for &[T]
 unsafe impl<T> StackingAnchor<&[T]> for &[T] {}
-unsafe impl<'a, T, U: Protocol> StackingAnchor<&[T]> for crate::Stacked<'a, U, &'a [T]> {}
+unsafe impl<T, U: Protocol> StackingAnchor<&[T]> for crate::Stacked<U, &[T]> {}
 
-impl<T, U: Protocol> Stack<U> for &[T]
-where
-    U: 'static,
-{
-    type Output = Stacked<'static, U, Self>;
+impl<T, U: Protocol> Stack<U> for &[T] {
+    type Output = Stacked<U, Self>;
 
     fn stack(self, lhs: U) -> Self::Output {
         Self::Output {
-            upper: MaybeOwned::Owned(lhs),
+            upper: lhs,
             lower: self,
         }
     }
@@ -153,7 +144,7 @@ pub unsafe trait Protocol {
     unsafe fn write_stage2(&self, mem: NonNull<u8>, payload_len: usize);
 }
 
-unsafe trait StackingAnchor<U: Protocol>: Protocol {}
+pub unsafe trait StackingAnchor<U: Protocol>: Protocol {}
 
 pub trait Stack<U: Protocol> {
     type Output;
@@ -163,27 +154,12 @@ pub trait Stack<U: Protocol> {
 
 pub unsafe trait IsSafeToWrite: Protocol {}
 
-pub enum MaybeOwned<'a, T> {
-    Owned(T),
-    Borrowed(&'a T),
-}
-
-impl<'a, T> MaybeOwned<'a, T> {
-    #[inline]
-    pub fn as_ref(&self) -> &T {
-        match self {
-            Self::Owned(t) => &t,
-            Self::Borrowed(_) => unreachable!(),
-        }
-    }
-}
-
-pub struct Stacked<'a, U: Protocol, L: Protocol> {
-    pub upper: MaybeOwned<'a, U>,
+pub struct Stacked<U: Protocol, L: Protocol> {
+    pub upper: U,
     pub lower: L,
 }
 
-impl<'a, U: Protocol, L: Protocol, K: Stack<Stacked<'a, U, L>>> Div<K> for Stacked<'a, U, L> {
+impl<U: Protocol, L: Protocol, K: Stack<Stacked<U, L>>> Div<K> for Stacked<U, L> {
     type Output = K::Output;
 
     #[inline]
@@ -192,31 +168,27 @@ impl<'a, U: Protocol, L: Protocol, K: Stack<Stacked<'a, U, L>>> Div<K> for Stack
     }
 }
 
-unsafe impl<'a, U: Protocol, L: Protocol> Protocol for Stacked<'a, U, L> {
+unsafe impl<U: Protocol, L: Protocol> Protocol for Stacked<U, L> {
     #[inline]
     fn write_len(&self) -> usize {
-        self.upper.as_ref().write_len() + self.lower.write_len()
+        self.upper.write_len() + self.lower.write_len()
     }
 
     unsafe fn write_stage1(&self, mem: NonNull<u8>) {
-        let upper = self.upper.as_ref();
-
-        upper.write_stage1(mem);
-        self.lower.write_stage1(mem.add(upper.write_len()));
+        self.upper.write_stage1(mem);
+        self.lower.write_stage1(mem.add(self.upper.write_len()));
     }
 
     unsafe fn write_stage2(&self, mem: NonNull<u8>, payload_len: usize) {
-        let upper = self.upper.as_ref();
-
-        let uplen = upper.write_len();
+        let uplen = self.upper.write_len();
         let mem2 = mem.add(uplen);
 
-        upper.write_stage2(mem, payload_len);
+        self.upper.write_stage2(mem, payload_len);
         self.lower.write_stage2(mem2, payload_len - uplen);
     }
 }
 
-unsafe impl<'a, U: IsSafeToWrite, L: Protocol> IsSafeToWrite for Stacked<'a, U, L> {}
+unsafe impl<U: IsSafeToWrite, L: Protocol> IsSafeToWrite for Stacked<U, L> {}
 
 impl<T: IsSafeToWrite + Sized> IntoBoxedBytes for T {
     fn into_boxed_bytes(self) -> Box<[u8]> {
@@ -235,18 +207,42 @@ impl<T: IsSafeToWrite + Sized> IntoBoxedBytes for T {
     }
 }
 
+pub struct PacketParser<'a> {
+    payload: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> PacketParser<'a> {
+    pub fn new(packet: &'a [u8]) -> Self {
+        Self {
+            payload: packet,
+            cursor: 0,
+        }
+    }
+
+    pub fn next<U: Protocol + StackingAnchor<U>>(&mut self) -> &'a U {
+        let ptr = unsafe { &*self.payload.as_ptr().add(self.cursor).cast::<U>() };
+        self.cursor += core::mem::size_of::<U>();
+        ptr
+    }
+
+    pub fn payload(&self) -> &'a [u8] {
+        &self.payload[self.cursor..]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::data_link::{Eth, MacAddr};
     use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
     use super::transport::{Tcp, Udp};
-    use super::{IntoBoxedBytes, Stacked};
+    use super::IntoBoxedBytes;
 
-    // #[test]
-    // fn ui() {
-    //     let t = trybuild::TestCases::new();
-    //     t.compile_fail("tests/ui/*.rs");
-    // }
+    #[test]
+    fn ui() {
+        let t = trybuild::TestCases::new();
+        t.compile_fail("tests/ui/*.rs");
+    }
 
     #[test]
     fn udp_stack() {
@@ -298,12 +294,15 @@ mod tests {
     }
 
     #[test]
-    fn parsed_packet() {
-        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, crate::data_link::Type::Ip);
+    fn packet_parse() {
+        const RAW_PACKET: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 69, 0, 0, 32, 0, 0, 0, 0, 64, 17, 122, 206,
+            255, 255, 255, 255, 255, 255, 255, 255, 31, 144, 0, 80, 0, 12, 85, 108, 69, 69, 69, 69,
+        ];
 
-        let x = Stacked {
-            upper: crate::MaybeOwned::Borrowed(&eth),
-            lower: [2, 3, 4],
-        };
+        let mut packet_parser = crate::PacketParser::new(&RAW_PACKET);
+        let eth = packet_parser.next::<Eth>();
+        let ip = packet_parser.next::<Ipv4>();
+        let udp = packet_parser.next::<Udp>();
     }
 }

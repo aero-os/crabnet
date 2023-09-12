@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(allocator_api)]
+#![feature(allocator_api, trivial_bounds, new_uninit)]
 
 extern crate alloc;
 
@@ -56,8 +56,15 @@ macro_rules! impl_stack {
     }
 }
 
-pub trait IntoBoxedBytes<A: Allocator = Global> {
-    fn into_boxed_bytes(self) -> Box<[u8], A>;
+pub trait IntoBoxedBytes
+where
+    Self: Sized,
+{
+    fn into_boxed_bytes(self) -> Box<[u8]> {
+        self.into_boxed_bytes_in(Global)
+    }
+
+    fn into_boxed_bytes_in<A: Allocator>(self, alloc: A) -> Box<[u8], A>;
 }
 
 trait PointerExtension {
@@ -191,19 +198,20 @@ unsafe impl<U: Protocol, L: Protocol> Protocol for Stacked<U, L> {
 unsafe impl<U: IsSafeToWrite, L: Protocol> IsSafeToWrite for Stacked<U, L> {}
 
 impl<T: IsSafeToWrite + Sized> IntoBoxedBytes for T {
-    fn into_boxed_bytes(self) -> Box<[u8]> {
+    fn into_boxed_bytes_in<A: Allocator>(self, alloc: A) -> Box<[u8], A> {
         let total_size = self.write_len();
-        let mut data = alloc::vec![0u8; total_size].into_boxed_slice();
+        let mut data = Box::new_uninit_slice_in(total_size, alloc);
 
         // SAFETY: Memory allocated by [`Vec`] is guaranteed to be non-null.
-        let ptr = unsafe { NonNull::new_unchecked(data.as_mut_ptr()) };
+        let ptr = unsafe { NonNull::new_unchecked(data.as_mut_ptr().cast()) };
 
         unsafe {
             self.write_stage1(ptr);
             self.write_stage2(ptr, total_size);
         }
 
-        data
+        // SAFETY: The data has been initialized above.
+        unsafe { data.assume_init() }
     }
 }
 
@@ -233,7 +241,7 @@ impl<'a> PacketParser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::data_link::{Eth, MacAddr};
+    use super::data_link::{Eth, EthType, MacAddr};
     use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
     use super::transport::{Tcp, Udp};
     use super::IntoBoxedBytes;
@@ -251,7 +259,7 @@ mod tests {
             255, 255, 255, 255, 255, 255, 255, 255, 31, 144, 0, 80, 0, 12, 85, 108, 69, 69, 69, 69,
         ];
 
-        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, crate::data_link::Type::Ip);
+        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);
         let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Udp);
         let udp = Udp::new(8080, 80);
 
@@ -267,7 +275,7 @@ mod tests {
             0, 0, 5, 119, 0, 0, 69, 69, 69, 69,
         ];
 
-        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, crate::data_link::Type::Ip);
+        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);
         let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Tcp);
         let tcp = Tcp::new(8080, 80);
 
@@ -285,7 +293,7 @@ mod tests {
         // Payload as a slice.
         let payload: &[u8] = [69u8; 4].as_slice();
 
-        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, crate::data_link::Type::Ip);
+        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);
         let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Udp);
         let udp = Udp::new(8080, 80);
 
@@ -306,7 +314,7 @@ mod tests {
         let eth = packet_parser.next::<Eth>();
         assert_eq!(eth.src_mac, MacAddr::NULL);
         assert_eq!(eth.dest_mac, MacAddr::NULL);
-        assert_eq!(eth.typ, crate::data_link::Type::Ip);
+        assert_eq!(eth.typ, crate::data_link::EthType::Ip);
 
         let ip = packet_parser.next::<Ipv4>();
         assert_eq!(ip.src_ip, Ipv4Addr::BROADCAST);

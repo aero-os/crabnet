@@ -12,6 +12,7 @@ impl Ipv4Addr {
     /// [RFC 8200 § 2]: https://www.rfc-editor.org/rfc/rfc791#section-3.2
     pub const ADDR_SIZE: usize = 4;
     pub const BROADCAST: Self = Self([0xff; Self::ADDR_SIZE]);
+    pub const NULL: Self = Self([0; Self::ADDR_SIZE]);
 
     pub fn new(addr: [u8; Self::ADDR_SIZE]) -> Self {
         Self(addr)

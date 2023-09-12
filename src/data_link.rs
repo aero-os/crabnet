@@ -1,3 +1,7 @@
+use byte_endian::BigEndian;
+use static_assertions::const_assert_eq;
+
+use crate::network::Ipv4Addr;
 use crate::{IsSafeToWrite, Protocol, Stack, Stacked, StackingAnchor};
 
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
@@ -12,7 +16,7 @@ impl MacAddr {
 
 #[derive(Debug, PartialEq)]
 #[repr(u16)]
-pub enum Type {
+pub enum EthType {
     Ip = 0x800u16.swap_bytes(),
     Arp = 0x0806u16.swap_bytes(),
 }
@@ -21,11 +25,13 @@ pub enum Type {
 pub struct Eth {
     pub dest_mac: MacAddr,
     pub src_mac: MacAddr,
-    pub typ: Type,
+    pub typ: EthType,
 }
 
+const_assert_eq!(core::mem::size_of::<Eth>(), 14);
+
 impl Eth {
-    pub fn new(dest_mac: MacAddr, src_mac: MacAddr, typ: Type) -> Self {
+    pub fn new(dest_mac: MacAddr, src_mac: MacAddr, typ: EthType) -> Self {
         Self {
             dest_mac,
             src_mac,
@@ -50,5 +56,96 @@ impl<U: Protocol> Stack<U> for Eth {
 }
 
 crate::impl_stack!(@make Eth {
+    fn write_stage2(&self, _mem: NonNull<u8>, _payload_len: usize) {}
+});
+
+#[derive(Debug, PartialEq)]
+pub struct ArpAddress(MacAddr, Ipv4Addr);
+
+impl ArpAddress {
+    pub fn new(mac: MacAddr, ip: Ipv4Addr) -> Self {
+        Self(mac, ip)
+    }
+
+    pub fn mac(&self) -> MacAddr {
+        self.0
+    }
+
+    pub fn ip(&self) -> Ipv4Addr {
+        self.1
+    }
+}
+
+/// ARP Hardware Type
+#[derive(Copy, Clone)]
+#[repr(u16)]
+pub enum ArpHardwareType {
+    Ethernet = 1u16.swap_bytes(),
+}
+
+/// ARP Opcode
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(u16)]
+pub enum ArpOpcode {
+    Request = 1u16.swap_bytes(),
+    Reply = 2u16.swap_bytes(),
+}
+
+#[repr(C)]
+pub struct Arp {
+    pub htype: ArpHardwareType,
+    pub ptype: EthType,
+    /// Length in octets of a hardware address.
+    pub hlen: BigEndian<u8>,
+    /// Length in octets of an internetwork address.
+    pub plen: BigEndian<u8>,
+    pub opcode: ArpOpcode,
+    pub src_mac: MacAddr,
+    pub src_ip: Ipv4Addr,
+    pub dest_mac: MacAddr,
+    pub dest_ip: Ipv4Addr,
+}
+
+const_assert_eq!(core::mem::size_of::<Arp>(), 28);
+
+impl Arp {
+    /// Creates a new ARP header,
+    pub fn new(
+        htype: ArpHardwareType,
+        ptype: EthType,
+        src: ArpAddress,
+        dest: ArpAddress,
+        opcode: ArpOpcode,
+    ) -> Self {
+        Self {
+            htype,
+            ptype,
+            hlen: BigEndian::new(MacAddr::ADDR_SIZE as u8),
+            plen: BigEndian::new(Ipv4Addr::ADDR_SIZE as u8),
+            opcode,
+            src_mac: src.mac(),
+            src_ip: src.ip(),
+            dest_mac: dest.mac(),
+            dest_ip: dest.ip(),
+        }
+    }
+}
+
+unsafe impl StackingAnchor<Arp> for Arp {}
+unsafe impl<U: Protocol> StackingAnchor<Arp> for Stacked<U, Arp> {}
+unsafe impl IsSafeToWrite for Arp {}
+
+impl<U: Protocol> Stack<U> for Arp {
+    type Output = Stacked<U, Self>;
+
+    fn stack(self, lhs: U) -> Self::Output {
+        Self::Output {
+            upper: lhs,
+            lower: self,
+        }
+    }
+}
+
+crate::impl_stack!(@make Arp {
     fn write_stage2(&self, _mem: NonNull<u8>, _payload_len: usize) {}
 });

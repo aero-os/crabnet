@@ -314,7 +314,7 @@ mod tests {
         let eth = packet_parser.next::<Eth>();
         assert_eq!(eth.src_mac, MacAddr::NULL);
         assert_eq!(eth.dest_mac, MacAddr::NULL);
-        assert_eq!(eth.typ, crate::data_link::EthType::Ip);
+        assert_eq!(eth.typ, EthType::Ip);
 
         let ip = packet_parser.next::<Ipv4>();
         assert_eq!(ip.src_ip, Ipv4Addr::BROADCAST);

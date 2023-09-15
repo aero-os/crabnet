@@ -146,14 +146,11 @@ impl Tcp {
         self.ack_nr.to_native()
     }
 
-    /// Sets the ACK number to `value` and sets the [`TcpFlags::ACK`] flag.
+    /// Sets the ACK number to `value`.
     #[inline]
     pub fn set_ack_number(mut self, value: u32) -> Self {
         self.ack_nr = value.into();
-
-        let mut flags = self.flags();
-        flags.insert(TcpFlags::ACK);
-        self.set_flags(flags)
+        self
     }
 
     /// Returns the header size in bytes.

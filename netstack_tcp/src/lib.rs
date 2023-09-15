@@ -12,10 +12,8 @@ macro_rules! warn_on {
     };
 }
 
-#[derive(Default, PartialEq, Eq, Debug)]
+#[derive(Default, Clone, PartialEq, Eq, Debug)]
 pub enum State {
-    /// No connection state at all.
-    Closed,
     /// Waiting for a connection request from any remote TCP peer and port.
     #[default]
     Listen,
@@ -32,6 +30,20 @@ pub enum State {
     FinWait1,
     /// Waiting for a connection termination request from the remote TCP peer.
     FinWait2,
+    /// Waiting for a connection termination request from the local user.
+    CloseWait,
+    /// Waiting for a connection termination request acknowledgment from the remote TCP peer.
+    Closing,
+    /// Waiting for an acknowledgment of the connection termination request previously sent to the
+    /// remote TCP peer (this termination request sent to the remote TCP peer already included an
+    /// acknowledgment of the termination request sent from the remote TCP peer).
+    LastAck,
+    /// Waiting for enough time to pass to be sure the remote TCP peer received the acknowledgment
+    /// of its connection termination request and to avoid new connections being impacted by
+    /// delayed segments from previous connections.
+    TimeWait,
+    /// No connection state at all.
+    Closed,
 }
 
 /// State of the Send Sequence Space (RFC 793 S3.2 F4)
@@ -89,6 +101,7 @@ pub struct RecvSequenceSpace {
     pub irs: u32,
 }
 
+#[derive(Debug)]
 pub struct Address {
     pub src_port: u16,
     pub dest_port: u16,
@@ -112,7 +125,7 @@ pub struct Socket<D: NetworkDevice> {
     send: SendSequenceSpace,
 
     addr: Address,
-    device: Arc<D>,
+    pub device: Arc<D>,
 }
 
 impl<D: NetworkDevice> Socket<D> {
@@ -139,7 +152,7 @@ impl<D: NetworkDevice> Socket<D> {
         socket
     }
 
-    fn send_with_flags(&mut self, seq_number: u32, flags: TcpFlags) {
+    pub fn send_with_flags(&mut self, seq_number: u32, flags: TcpFlags) {
         let mut next_seq = seq_number;
         if flags.contains(TcpFlags::SYN) {
             next_seq = next_seq.wrapping_add(1);
@@ -157,7 +170,7 @@ impl<D: NetworkDevice> Socket<D> {
             .set_ack_number(self.recv.nxt);
 
         if wrapping_lt(self.send.nxt, next_seq) {
-            self.send.nxt = seq_number;
+            self.send.nxt = next_seq;
         }
 
         self.device.send(ip, tcp);
@@ -165,8 +178,37 @@ impl<D: NetworkDevice> Socket<D> {
 
     /// Send a SYN packet (connection request).
     fn send_syn(&mut self) {
+        self.send.wnd = u16::MAX;
         self.send_with_flags(self.send.nxt, TcpFlags::SYN);
         self.state = State::SynSent;
+    }
+
+    pub fn close(&mut self) {
+        match self.state {
+            // connection already closed.
+            State::Closed => return,
+            // connection is closing.
+            State::FinWait1
+            | State::FinWait2
+            | State::Closing
+            | State::LastAck
+            | State::TimeWait => return,
+
+            State::Listen | State::SynSent => {
+                // The connection has not been established yet, so we can just close it.
+                self.state = State::Closed;
+            }
+
+            State::SynRecv | State::Established => {
+                self.send_with_flags(self.send.nxt, TcpFlags::FIN | TcpFlags::ACK);
+                self.state = State::FinWait1;
+            }
+
+            State::CloseWait => {
+                self.send_with_flags(self.send.nxt, TcpFlags::FIN | TcpFlags::ACK);
+                self.state = State::LastAck;
+            }
+        }
     }
 
     pub fn recv(&mut self, tcp: &Tcp, payload: &[u8]) {
@@ -178,12 +220,21 @@ impl<D: NetworkDevice> Socket<D> {
             State::Closed => return,
 
             State::Listen => {
+                if flags.contains(TcpFlags::RST) {
+                    // Incoming RST should be ignored.
+                    return;
+                }
+
+                if flags.contains(TcpFlags::ACK) {
+                    // Bad ACK; connection is still in the listen state.
+                    self.send_with_flags(tcp.ack_number(), TcpFlags::RST);
+                    return;
+                }
+
                 if !flags.contains(TcpFlags::SYN) {
                     // Expected a SYN packet.
                     return;
                 }
-
-                warn_on!(!payload.is_empty(), "unexpected payload in SYN packet");
 
                 self.state = State::SynRecv;
 
@@ -212,6 +263,25 @@ impl<D: NetworkDevice> Socket<D> {
                 self.state = State::Established;
             }
 
+            State::SynSent => {
+                if flags.contains(TcpFlags::ACK | TcpFlags::SYN) {
+                    self.recv.nxt = tcp.sequence_number().wrapping_add(1);
+                    self.recv.irs = tcp.sequence_number();
+
+                    self.send.una = tcp.ack_number();
+
+                    if self.send.una > self.send.iss {
+                        // TODO(andypython): Parse TCP options.
+                        self.send.wnd = tcp.window();
+                        self.send.wl1 = tcp.sequence_number() as usize;
+                        self.send.wl2 = tcp.ack_number() as usize;
+                        self.state = State::Established;
+
+                        self.send_with_flags(self.send.nxt, TcpFlags::ACK);
+                    }
+                }
+            }
+
             State::Established => {
                 let seq_number = tcp.sequence_number();
                 if seq_number != self.recv.nxt {
@@ -230,12 +300,25 @@ impl<D: NetworkDevice> Socket<D> {
 
             _ => {}
         }
+
+        if flags.contains(TcpFlags::FIN) {
+            match self.state {
+                State::SynRecv | State::Established => {
+                    self.state = State::CloseWait;
+                }
+
+                // The segment sequence number cannot be validated. Drop the segment and return.
+                State::Closed | State::Listen | State::SynSent => return,
+
+                _ => unimplemented!(),
+            }
+        }
     }
 
     fn validate_packet(&self, tcp: &Tcp, payload: &[u8]) -> bool {
         let flags = tcp.flags();
 
-        if let State::Closed | State::Listen = self.state {
+        if let State::Closed | State::Listen | State::SynSent = self.state {
             return true;
         }
 
@@ -300,6 +383,11 @@ impl<D: NetworkDevice> Socket<D> {
         }
 
         true
+    }
+
+    #[inline]
+    pub fn state(&self) -> State {
+        self.state.clone()
     }
 }
 

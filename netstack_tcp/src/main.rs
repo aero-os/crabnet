@@ -51,7 +51,6 @@ pub fn main() -> io::Result<()> {
         if let Some(tcp_socket) = tcp_socket.as_mut() {
             tcp_socket.recv(tcp, payload);
         } else {
-            dbg!(&ipv4.dest_ip);
             let address = Address::new(tcp.dest_port(), tcp.src_port(), ipv4.src_ip);
             let socket = TcpSocket::new(device.clone(), address);
 
@@ -60,4 +59,116 @@ pub fn main() -> io::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use netstack_tcp::State;
+    use std::ops::Deref;
+
+    use super::*;
+
+    struct SocketShim(TcpSocket<Tun>);
+
+    impl SocketShim {
+        #[inline]
+        fn new(socket: TcpSocket<Tun>) -> Self {
+            Self(socket)
+        }
+
+        fn await_process(&mut self) {
+            let mut buf = [0u8; 1504];
+            let device = &self.0.device;
+
+            loop {
+                if let Ok(bytes_read) = device.0.recv(&mut buf) {
+                    // TODO: Check the first 4 bytes, the TUN header and discard if it's not IPv4.
+                    let packet = &buf[4..bytes_read];
+
+                    let mut packet_parser = PacketParser::new(packet);
+                    let ipv4 = packet_parser.next::<Ipv4>();
+
+                    if ipv4.protocol != Ipv4Type::Tcp {
+                        continue;
+                    }
+
+                    let tcp = packet_parser.next::<Tcp>();
+                    let options_size = tcp.header_size() as usize - tcp.write_len();
+                    let payload = &packet_parser.payload()[options_size..];
+
+                    self.0.recv(tcp, payload);
+                    break;
+                }
+            }
+        }
+    }
+
+    impl Deref for SocketShim {
+        type Target = TcpSocket<Tun>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    fn client_socket(device: Arc<Tun>) -> SocketShim {
+        let address = Address::new(4242, 6969, Ipv4Addr::new([192, 168, 0, 2]));
+        let socket = TcpSocket::connect(device, address);
+
+        SocketShim::new(socket)
+    }
+
+    fn server_socket(device: Arc<Tun>) -> SocketShim {
+        let address = Address::new(6969, 4242, Ipv4Addr::new([192, 168, 0, 2]));
+        let socket = TcpSocket::new(device, address);
+
+        SocketShim::new(socket)
+    }
+
+    macro_rules! run_command {
+        ($($t:tt)*) => {{
+            use std::process::Command;
+
+            let command = format!($($t)*);
+            eprintln!("Running `{command}`");
+
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .output()
+                .expect("failed to execute process");
+
+            if !output.status.success() {
+                panic!("command failed: {}", command);
+            }
+        }};
+    }
+
+    fn tun_device() -> Arc<Tun> {
+        let iface = Iface::new("tun1", Mode::Tun).unwrap();
+        run_command!("sudo ip addr add 192.168.0.1/24 dev tun1");
+        run_command!("sudo ip link set up dev tun1");
+
+        Arc::new(Tun(iface))
+    }
+
+    #[test]
+    fn simple_handshake() {
+        let device = tun_device();
+
+        let mut server = server_socket(device.clone());
+        let mut client = client_socket(device);
+
+        assert_eq!(server.state(), State::Listen);
+        assert_eq!(client.state(), State::SynSent);
+
+        server.await_process();
+        assert_eq!(server.state(), State::SynRecv);
+
+        client.await_process();
+        assert_eq!(client.state(), State::Established);
+
+        server.await_process();
+        assert_eq!(server.state(), State::Established);
+    }
 }

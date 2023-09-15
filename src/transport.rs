@@ -54,6 +54,8 @@ crate::impl_stack!(@make Udp {
 });
 
 bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(transparent)]
     pub struct TcpFlags: u16 {
         const FIN = 1 << 0;
         const SYN = 1 << 1;

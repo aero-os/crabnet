@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use netstack::network::{Ipv4, Ipv4Type};
+use netstack::network::{Ipv4, Ipv4Addr, Ipv4Type};
 use netstack::transport::{Tcp, TcpFlags};
 
 macro_rules! warn_on {
@@ -19,6 +19,8 @@ pub enum State {
     /// Waiting for a connection request from any remote TCP peer and port.
     #[default]
     Listen,
+    /// Waiting for a matching connection request after having sent a connection request
+    SynSent,
     /// Waiting for a confirming connection request acknowledgment after having both received and
     /// sent a connection request.
     SynRecv,
@@ -87,24 +89,57 @@ pub struct RecvSequenceSpace {
     pub irs: u32,
 }
 
-pub struct Socket {
+pub struct Address {
+    pub src_port: u16,
+    pub dest_port: u16,
+    pub dest_ip: Ipv4Addr,
+}
+
+impl Address {
+    #[inline]
+    pub fn new(src_port: u16, dest_port: u16, dest_ip: Ipv4Addr) -> Self {
+        Self {
+            src_port,
+            dest_port,
+            dest_ip,
+        }
+    }
+}
+
+pub struct Socket<D: NetworkDevice> {
     state: State,
     recv: RecvSequenceSpace,
     send: SendSequenceSpace,
-    device: Arc<dyn NetworkDevice>,
+
+    addr: Address,
+    device: Arc<D>,
 }
 
-impl Socket {
-    pub fn new(device: Arc<dyn NetworkDevice>) -> Self {
+impl<D: NetworkDevice> Socket<D> {
+    pub fn new(device: Arc<D>, address: Address) -> Self {
         Self {
             device,
             recv: RecvSequenceSpace::default(),
             send: SendSequenceSpace::default(),
             state: State::default(),
+            addr: address,
         }
     }
 
-    fn send_with_flags(&mut self, ipv4: &Ipv4, tcp: &Tcp, seq_number: u32, flags: TcpFlags) {
+    pub fn connect(device: Arc<D>, address: Address) -> Self {
+        let mut socket = Self {
+            device,
+            recv: RecvSequenceSpace::default(),
+            send: SendSequenceSpace::default(),
+            state: State::default(),
+            addr: address,
+        };
+
+        socket.send_syn();
+        socket
+    }
+
+    fn send_with_flags(&mut self, seq_number: u32, flags: TcpFlags) {
         let mut next_seq = seq_number;
         if flags.contains(TcpFlags::SYN) {
             next_seq = next_seq.wrapping_add(1);
@@ -114,8 +149,8 @@ impl Socket {
             next_seq = next_seq.wrapping_add(1);
         }
 
-        let ip = Ipv4::new(ipv4.dest_ip, ipv4.src_ip, Ipv4Type::Tcp);
-        let tcp = Tcp::new(tcp.dest_port(), tcp.src_port())
+        let ip = Ipv4::new(Ipv4Addr::NULL, self.addr.dest_ip, Ipv4Type::Tcp);
+        let tcp = Tcp::new(self.addr.src_port, self.addr.dest_port)
             .set_flags(flags)
             .set_window(self.send.wnd)
             .set_sequence_number(seq_number)
@@ -128,7 +163,13 @@ impl Socket {
         self.device.send(ip, tcp);
     }
 
-    pub fn recv(&mut self, ipv4: &Ipv4, tcp: &Tcp, payload: &[u8]) {
+    /// Send a SYN packet (connection request).
+    fn send_syn(&mut self) {
+        self.send_with_flags(self.send.nxt, TcpFlags::SYN);
+        self.state = State::SynSent;
+    }
+
+    pub fn recv(&mut self, tcp: &Tcp, payload: &[u8]) {
         warn_on!(!self.validate_packet(tcp, payload), "invalid packet");
 
         let flags = tcp.flags();
@@ -158,7 +199,7 @@ impl Socket {
                 self.send.wnd = u16::MAX;
 
                 // Send SYN-ACK.
-                self.send_with_flags(ipv4, tcp, self.send.iss, TcpFlags::SYN | TcpFlags::ACK);
+                self.send_with_flags(self.send.iss, TcpFlags::SYN | TcpFlags::ACK);
             }
 
             State::SynRecv => {
@@ -184,7 +225,7 @@ impl Socket {
                 self.recv.wnd = u16::MAX;
 
                 log::debug!("unread_data: {:?}", payload);
-                self.send_with_flags(ipv4, tcp, self.send.nxt, TcpFlags::ACK);
+                self.send_with_flags(self.send.nxt, TcpFlags::ACK);
             }
 
             _ => {}

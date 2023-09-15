@@ -1,6 +1,6 @@
 use byte_endian::BigEndian;
 
-use crate::{Protocol, Stack, Stacked, StackingAnchor};
+use crate::{IsSafeToWrite, Protocol, Stack, Stacked, StackingAnchor};
 
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
 #[repr(C)]
@@ -66,6 +66,7 @@ impl Ipv4 {
 }
 
 unsafe impl StackingAnchor<Ipv4> for Ipv4 {}
+unsafe impl IsSafeToWrite for Ipv4 {}
 unsafe impl<U: Protocol> StackingAnchor<Ipv4> for Stacked<U, Ipv4> {}
 
 impl<U: Protocol> Stack<U> for Ipv4 {

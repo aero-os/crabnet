@@ -1,0 +1,10 @@
+[package]
+name = "netstack_tcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+env_logger = "0.10.0"
+log = "0.4.20"
+netstack = { path = "../" }
+tun-tap = { version = "0.1.4", default-features = false }

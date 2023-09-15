@@ -21,6 +21,7 @@ pub enum EthType {
     Arp = 0x0806u16.swap_bytes(),
 }
 
+// Eth
 #[repr(C)]
 pub struct Eth {
     pub dest_mac: MacAddr,
@@ -59,6 +60,44 @@ crate::impl_stack!(@make Eth {
     fn write_stage2(&self, _mem: NonNull<u8>, _payload_len: usize) {}
 });
 
+// Tun
+#[repr(C)]
+pub struct Tun {
+    pub flags: BigEndian<u16>,
+    pub typ: EthType,
+}
+
+const_assert_eq!(core::mem::size_of::<Tun>(), 4);
+
+impl Tun {
+    pub fn new(flags: u16, typ: EthType) -> Self {
+        Self {
+            flags: flags.into(),
+            typ,
+        }
+    }
+}
+
+unsafe impl StackingAnchor<Tun> for Tun {}
+unsafe impl<U: Protocol> StackingAnchor<Tun> for Stacked<U, Eth> {}
+unsafe impl IsSafeToWrite for Tun {}
+
+impl<U: Protocol> Stack<U> for Tun {
+    type Output = Stacked<U, Self>;
+
+    fn stack(self, lhs: U) -> Self::Output {
+        Self::Output {
+            upper: lhs,
+            lower: self,
+        }
+    }
+}
+
+crate::impl_stack!(@make Tun {
+    fn write_stage2(&self, _mem: NonNull<u8>, _payload_len: usize) {}
+});
+
+// ARP
 #[derive(Debug, PartialEq)]
 pub struct ArpAddress(MacAddr, Ipv4Addr);
 

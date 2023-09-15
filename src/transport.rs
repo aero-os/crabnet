@@ -53,6 +53,17 @@ crate::impl_stack!(@make Udp {
     }
 });
 
+bitflags::bitflags! {
+    pub struct TcpFlags: u16 {
+        const FIN = 1 << 0;
+        const SYN = 1 << 1;
+        const RST = 1 << 2;
+        const PSH = 1 << 3;
+        const ACK = 1 << 4;
+        const URG = 1 << 5;
+    }
+}
+
 #[repr(C)]
 pub struct Tcp {
     pub src_port: BigEndian<u16>,
@@ -85,6 +96,15 @@ impl Tcp {
     }
 
     #[inline]
+    pub fn src_port(&self) -> u16 {
+        self.src_port.to_native()
+    }
+
+    pub fn dest_port(&self) -> u16 {
+        self.dest_port.to_native()
+    }
+
+    #[inline]
     pub fn sequence_number(&self) -> u32 {
         self.seq_nr.to_native()
     }
@@ -93,6 +113,11 @@ impl Tcp {
     pub fn set_sequence_number(mut self, value: u32) -> Self {
         self.seq_nr = value.into();
         self
+    }
+
+    #[inline]
+    pub fn window(&self) -> u16 {
+        self.window.to_native()
     }
 
     #[inline]
@@ -116,6 +141,11 @@ impl Tcp {
         self
     }
 
+    #[inline]
+    pub fn ack_number(&self) -> u32 {
+        self.ack_nr.to_native()
+    }
+
     /// Sets the ACK number to `value` and sets the [`TcpFlags::ACK`] flag.
     #[inline]
     pub fn set_ack_number(mut self, value: u32) -> Self {
@@ -124,6 +154,14 @@ impl Tcp {
         let mut flags = self.flags();
         flags.insert(TcpFlags::ACK);
         self.set_flags(flags)
+    }
+
+    /// Returns the header size in bytes.
+    #[inline]
+    pub fn header_size(&self) -> u8 {
+        // bits 12..=15 specify the header size in 32-bit words.
+        let header_size = self.flags.to_native().get_bits(12..=15);
+        header_size as u8 * core::mem::size_of::<u32>() as u8
     }
 }
 
@@ -169,14 +207,3 @@ crate::impl_stack!(@make Tcp {
         tcp.checksum = checksum::make_combine(&[checksum::calculate(&pseudo_header), checksum::calculate_with_len(tcp, payload_len)]);
     }
 });
-
-bitflags::bitflags! {
-    pub struct TcpFlags: u16 {
-        const FIN = 1 << 0;
-        const SYN = 1 << 1;
-        const RST = 1 << 2;
-        const PSH = 1 << 3;
-        const ACK = 1 << 4;
-        const URG = 1 << 5;
-    }
-}

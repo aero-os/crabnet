@@ -27,21 +27,23 @@ pub enum Ipv4Type {
 }
 
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, packed)]
 pub struct Ipv4 {
     pub v: BigEndian<u8>,
     pub tos: BigEndian<u8>,
-    pub length: BigEndian<u16>,
+    pub(crate) length: BigEndian<u16>,
     pub ident: BigEndian<u16>,
     pub frag_offset: BigEndian<u16>,
     pub ttl: BigEndian<u8>,
-    pub protocol: Ipv4Type,
-    pub hcrc: BigEndian<u16>,
-    pub src_ip: Ipv4Addr,
-    pub dest_ip: Ipv4Addr,
+    protocol: Ipv4Type,
+    checksum: BigEndian<u16>,
+    src_ip: Ipv4Addr,
+    dest_ip: Ipv4Addr,
 }
 
 impl Ipv4 {
+    crate::impl_stack!(@getter src_ip: Ipv4Addr as Ipv4Addr, dest_ip: Ipv4Addr as Ipv4Addr, protocol: Ipv4Type as Ipv4Type);
+
     pub fn new(src_ip: Ipv4Addr, dest_ip: Ipv4Addr, protocol: Ipv4Type) -> Self {
         Self {
             v: 0x45.into(),
@@ -50,12 +52,17 @@ impl Ipv4 {
             ident: 0.into(),
             frag_offset: 0.into(),
             ttl: 64.into(),
-            hcrc: 0.into(),
+            checksum: 0.into(),
 
             protocol,
             src_ip,
             dest_ip,
         }
+    }
+
+    pub fn set_src_ip(mut self, src_ip: Ipv4Addr) -> Self {
+        self.src_ip = src_ip;
+        self
     }
 
     #[inline]
@@ -86,6 +93,6 @@ crate::impl_stack!(@make Ipv4 {
         let ipv4 = unsafe { mem.cast::<Ipv4>().as_mut() };
 
         ipv4.length = (payload_len as u16).into();
-        ipv4.hcrc = checksum::make(checksum::calculate(ipv4));
+        ipv4.checksum = checksum::make(checksum::calculate(ipv4));
     }
 });

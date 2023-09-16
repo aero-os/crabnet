@@ -15,10 +15,10 @@ impl PseudoHeader {
     pub fn new(ip_hdr: &Ipv4) -> PseudoHeader {
         let len = ip_hdr.length;
         PseudoHeader {
-            src_ip: ip_hdr.src_ip,
-            dst_ip: ip_hdr.dest_ip,
+            src_ip: ip_hdr.src_ip(),
+            dst_ip: ip_hdr.dest_ip(),
             reserved: 0,
-            ty: ip_hdr.protocol,
+            ty: ip_hdr.protocol(),
             size: BigEndian::from(len.to_native() - core::mem::size_of::<Ipv4>() as u16),
         }
     }
@@ -26,8 +26,12 @@ impl PseudoHeader {
 
 /// Compute the 32-bit internet checksum for `data`.
 fn calculate_checksum(data: &[u8]) -> u32 {
-    let (head, bytes, tail) = unsafe { data.align_to::<BigEndian<u16>>() };
-    assert!(head.is_empty() && tail.is_empty(), "unaligned data");
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            data.as_ptr().cast::<BigEndian<u16>>(),
+            data.len() / core::mem::size_of::<u16>(),
+        )
+    };
 
     let mut sum = bytes
         .iter()

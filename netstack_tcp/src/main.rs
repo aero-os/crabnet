@@ -57,7 +57,7 @@ impl Tun {
 }
 
 impl NetworkDevice for Tun {
-    fn send(&self, mut ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
+    fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
         use netstack::data_link::Tun;
 
         self.queue.lock().unwrap().insert(
@@ -69,7 +69,7 @@ impl NetworkDevice for Tun {
         );
 
         // The IP is set in the run.sh script.
-        ipv4.src_ip = Ipv4Addr::new([192, 168, 0, 2]);
+        let ipv4 = ipv4.set_src_ip(Ipv4Addr::new([192, 168, 0, 2]));
 
         let tun = Tun::new(0, EthType::Ip);
         let packet = (tun / ipv4 / tcp / payload).into_boxed_bytes();
@@ -99,7 +99,7 @@ pub fn main() -> io::Result<()> {
         let mut packet_parser = PacketParser::new(packet);
         let ipv4 = packet_parser.next::<Ipv4>();
 
-        if ipv4.protocol != Ipv4Type::Tcp {
+        if ipv4.protocol() != Ipv4Type::Tcp {
             continue;
         }
 
@@ -115,7 +115,7 @@ pub fn main() -> io::Result<()> {
                 done = true;
             }
         } else {
-            let address = Address::new(tcp.dest_port(), tcp.src_port(), ipv4.src_ip);
+            let address = Address::new(tcp.dest_port(), tcp.src_port(), ipv4.src_ip());
             let socket = TcpSocket::new(device.clone(), address);
 
             tcp_socket = Some(socket);
@@ -272,7 +272,7 @@ mod test {
                     assert_eq!(x, EthType::Ip);
 
                     let ipv4 = packet_parser.next::<Ipv4>();
-                    assert_eq!(ipv4.protocol, Ipv4Type::Tcp);
+                    assert_eq!(ipv4.protocol(), Ipv4Type::Tcp);
 
                     let tcp = packet_parser.next::<Tcp>();
                     let options_size = tcp.header_size() as usize - tcp.write_len();

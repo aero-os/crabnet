@@ -14,7 +14,7 @@ impl MacAddr {
     pub const NULL: Self = Self([0; Self::ADDR_SIZE]);
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum EthType {
     Ip = 0x800u16.swap_bytes(),
@@ -22,16 +22,18 @@ pub enum EthType {
 }
 
 // Eth
-#[repr(C)]
+#[repr(C, packed)]
 pub struct Eth {
-    pub dest_mac: MacAddr,
-    pub src_mac: MacAddr,
-    pub typ: EthType,
+    dest_mac: MacAddr,
+    src_mac: MacAddr,
+    typ: EthType,
 }
 
 const_assert_eq!(core::mem::size_of::<Eth>(), 14);
 
 impl Eth {
+    crate::impl_stack!(@getter dest_mac: MacAddr as MacAddr, src_mac: MacAddr as MacAddr, typ: EthType as EthType);
+
     pub fn new(dest_mac: MacAddr, src_mac: MacAddr, typ: EthType) -> Self {
         Self {
             dest_mac,
@@ -61,7 +63,7 @@ crate::impl_stack!(@make Eth {
 });
 
 // Tun
-#[repr(C)]
+#[repr(C, packed)]
 pub struct Tun {
     pub flags: BigEndian<u16>,
     pub typ: EthType,
@@ -116,21 +118,21 @@ impl ArpAddress {
 }
 
 /// ARP Hardware Type
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[repr(u16)]
 pub enum ArpHardwareType {
     Ethernet = 1u16.swap_bytes(),
 }
 
 /// ARP Opcode
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u16)]
 pub enum ArpOpcode {
     Request = 1u16.swap_bytes(),
     Reply = 2u16.swap_bytes(),
 }
 
-#[repr(C)]
+#[repr(C, packed)]
 pub struct Arp {
     pub htype: ArpHardwareType,
     pub ptype: EthType,

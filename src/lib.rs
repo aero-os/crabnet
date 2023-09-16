@@ -53,6 +53,14 @@ macro_rules! impl_stack {
 
             unsafe fn write_stage2(&self, $mem: core::ptr::NonNull<u8>, $payload_len: usize) $code
         }
+    };
+
+    (@getter $($field_name:ident: $type:ty as $casted:ty),*) => {
+        $(
+            pub fn $field_name(&self) -> $casted {
+                self.$field_name.into()
+            }
+        )*
     }
 }
 
@@ -312,17 +320,17 @@ mod tests {
 
         let mut packet_parser = PacketParser::new(&RAW_PACKET);
         let eth = packet_parser.next::<Eth>();
-        assert_eq!(eth.src_mac, MacAddr::NULL);
-        assert_eq!(eth.dest_mac, MacAddr::NULL);
-        assert_eq!(eth.typ, EthType::Ip);
+        assert_eq!(eth.src_mac(), MacAddr::NULL);
+        assert_eq!(eth.dest_mac(), MacAddr::NULL);
+        assert_eq!(eth.typ(), EthType::Ip);
 
         let ip = packet_parser.next::<Ipv4>();
-        assert_eq!(ip.src_ip, Ipv4Addr::BROADCAST);
-        assert_eq!(ip.dest_ip, Ipv4Addr::BROADCAST);
-        assert_eq!(ip.protocol, Ipv4Type::Udp);
+        assert_eq!(ip.src_ip(), Ipv4Addr::BROADCAST);
+        assert_eq!(ip.dest_ip(), Ipv4Addr::BROADCAST);
+        assert_eq!(ip.protocol(), Ipv4Type::Udp);
 
         let udp = packet_parser.next::<Udp>();
-        assert_eq!(udp.src_port, 8080.into());
-        assert_eq!(udp.dst_port, 80.into());
+        assert_eq!(udp.src_port(), 8080);
+        assert_eq!(udp.dst_port(), 80);
     }
 }

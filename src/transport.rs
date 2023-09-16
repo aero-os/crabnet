@@ -5,15 +5,17 @@ use static_assertions::const_assert_eq;
 use crate::network::Ipv4;
 use crate::{PointerExtension, Protocol, Stack, Stacked, StackingAnchor};
 
-#[repr(C)]
+#[repr(C, packed)]
 pub struct Udp {
-    pub src_port: BigEndian<u16>,
-    pub dst_port: BigEndian<u16>,
-    pub len: BigEndian<u16>,
-    pub crc: BigEndian<u16>,
+    src_port: BigEndian<u16>,
+    dst_port: BigEndian<u16>,
+    len: BigEndian<u16>,
+    crc: BigEndian<u16>,
 }
 
 impl Udp {
+    crate::impl_stack!(@getter src_port: BigEndian<u16> as u16, dst_port: BigEndian<u16> as u16);
+
     pub fn new(src_port: u16, dst_port: u16) -> Self {
         Self {
             src_port: src_port.into(),
@@ -66,7 +68,7 @@ bitflags::bitflags! {
     }
 }
 
-#[repr(C)]
+#[repr(C, packed)]
 pub struct Tcp {
     pub src_port: BigEndian<u16>,
     pub dest_port: BigEndian<u16>,

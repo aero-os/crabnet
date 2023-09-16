@@ -45,16 +45,10 @@ impl Tun {
         let s2 = s1.clone();
 
         thread::spawn(move || loop {
-            let mut expired_timers = vec![];
-
             for (key, timer) in s2.queue.lock().unwrap().iter_mut() {
                 if Instant::now() - timer.now >= timer.handle.duration {
-                    expired_timers.push(*key);
+                    // todo!()
                 }
-            }
-
-            for key in expired_timers {
-                s2.queue.lock().unwrap().remove(&key);
             }
         });
 
@@ -63,7 +57,7 @@ impl Tun {
 }
 
 impl NetworkDevice for Tun {
-    fn send(&self, mut ipv4: Ipv4, tcp: Tcp, handle: RetransmitHandle) {
+    fn send(&self, mut ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
         use netstack::data_link::Tun;
 
         self.queue.lock().unwrap().insert(
@@ -78,7 +72,7 @@ impl NetworkDevice for Tun {
         ipv4.src_ip = Ipv4Addr::new([192, 168, 0, 2]);
 
         let tun = Tun::new(0, EthType::Ip);
-        let packet = (tun / ipv4 / tcp).into_boxed_bytes();
+        let packet = (tun / ipv4 / tcp / payload).into_boxed_bytes();
 
         self.iface
             .send(&packet)
@@ -96,6 +90,7 @@ pub fn main() -> io::Result<()> {
 
     let mut buf = [0u8; 1504];
     let mut tcp_socket: Option<TcpSocket<Tun>> = None;
+    let mut done = false;
 
     while let Ok(bytes_read) = device.iface.recv(&mut buf) {
         // TODO: Check the first 4 bytes, the TUN header and discard if it's not IPv4.
@@ -113,7 +108,12 @@ pub fn main() -> io::Result<()> {
         let payload = &packet_parser.payload()[options_size..];
 
         if let Some(tcp_socket) = tcp_socket.as_mut() {
-            tcp_socket.recv(tcp, payload);
+            tcp_socket.on_packet(tcp, payload);
+
+            if tcp_socket.state() == netstack_tcp::State::Established && !done {
+                tcp_socket.send(b"okay!").unwrap();
+                done = true;
+            }
         } else {
             let address = Address::new(tcp.dest_port(), tcp.src_port(), ipv4.src_ip);
             let socket = TcpSocket::new(device.clone(), address);
@@ -171,8 +171,9 @@ mod test {
     }
 
     impl NetworkDevice for FakeDevice {
-        fn send(&self, ipv4: Ipv4, tcp: Tcp, handle: RetransmitHandle) {
-            let packet = (data_link::Tun::new(0, EthType::Ip) / ipv4 / tcp).into_boxed_bytes();
+        fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
+            let tun = data_link::Tun::new(0, EthType::Ip);
+            let packet = (tun / ipv4 / tcp / payload).into_boxed_bytes();
 
             let seq_number = handle.seq_number;
             let rt_entry = RetransmitEntry {
@@ -200,23 +201,17 @@ mod test {
 
             let mut queue = device.queue.lock().unwrap();
             let mut peer = device.peer.lock().unwrap();
-            let mut expired_timers = vec![];
 
-            for (seq_number, timer) in queue.iter_mut() {
+            for timer in queue.values_mut() {
                 if now - timer.now >= timer.handle.duration {
                     peer.push(Packet(timer.raw.clone().into_boxed_slice()));
-                    expired_timers.push(*seq_number);
-                } else {
                     timer.handle.duration *= 2;
                 }
             }
 
-            for seq_number in expired_timers {
-                queue.remove(&seq_number);
-            }
-
-            drop(queue);
             drop(peer);
+            drop(queue);
+
             // Check the timers every 100ms.
             thread::sleep(Duration::from_millis(100));
         });
@@ -273,7 +268,8 @@ mod test {
                     let mut packet_parser = PacketParser::new(&buf[..bytes_read]);
 
                     let tun = packet_parser.next::<data_link::Tun>();
-                    assert_eq!(tun.typ, EthType::Ip);
+                    let x = tun.typ;
+                    assert_eq!(x, EthType::Ip);
 
                     let ipv4 = packet_parser.next::<Ipv4>();
                     assert_eq!(ipv4.protocol, Ipv4Type::Tcp);
@@ -282,7 +278,7 @@ mod test {
                     let options_size = tcp.header_size() as usize - tcp.write_len();
                     let payload = &packet_parser.payload()[options_size..];
 
-                    self.0.recv(tcp, payload);
+                    self.0.on_packet(tcp, payload);
                     break;
                 }
             }
@@ -326,6 +322,26 @@ mod test {
 
         server.await_process();
         assert_eq!(server.state(), State::CloseWait);
+    }
+
+    #[test]
+    fn send_bytes() {
+        let (mut server, mut client) = socket_pair();
+        server.await_process();
+        client.await_process();
+        server.await_process();
+
+        // Send some yummy bytes.
+        client.send(b"Hello, world!").expect("failed to send bytes");
+        server.await_process();
+
+        let mut buf = [0u8; 512];
+        let bytes_read = server.recv(&mut buf).expect("failed to recv bytes");
+        assert_eq!(bytes_read, 13);
+        assert_eq!(&buf[..bytes_read], b"Hello, world!");
+
+        client.close();
+        server.await_process();
     }
 
     #[test]

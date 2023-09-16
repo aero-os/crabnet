@@ -111,11 +111,19 @@ impl Address {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum Error {
+    /// Transport endpoint is not connected.
+    NotConnected,
+    /// No buffer space available.
+    NoBufs,
+}
+
 pub struct Socket<D: NetworkDevice> {
     state: State,
     recv: RecvSequenceSpace,
     send: SendSequenceSpace,
-
+    recv_queue: Vec<u8>,
     addr: Address,
     pub device: Arc<D>,
 }
@@ -127,6 +135,7 @@ impl<D: NetworkDevice> Socket<D> {
             recv: RecvSequenceSpace::default(),
             send: SendSequenceSpace::default(),
             state: State::default(),
+            recv_queue: Vec::new(),
             addr: address,
         }
     }
@@ -137,6 +146,7 @@ impl<D: NetworkDevice> Socket<D> {
             recv: RecvSequenceSpace::default(),
             send: SendSequenceSpace::default(),
             state: State::default(),
+            recv_queue: Vec::new(),
             addr: address,
         };
 
@@ -144,8 +154,8 @@ impl<D: NetworkDevice> Socket<D> {
         socket
     }
 
-    pub fn send_with_flags(&mut self, seq_number: u32, flags: TcpFlags) {
-        let mut next_seq = seq_number;
+    pub fn send_raw(&mut self, seq_number: u32, flags: TcpFlags, payload: &[u8]) {
+        let mut next_seq = seq_number.wrapping_add(payload.len() as u32);
         if flags.contains(TcpFlags::SYN) {
             next_seq = next_seq.wrapping_add(1);
         }
@@ -168,7 +178,12 @@ impl<D: NetworkDevice> Socket<D> {
         let retransmit_duration = Duration::from_millis(100);
         let retransmit_handle = RetransmitHandle::new(seq_number, retransmit_duration);
 
-        self.device.send(ip, tcp, retransmit_handle);
+        self.device.send(ip, tcp, payload, retransmit_handle);
+    }
+
+    #[inline]
+    pub fn send_with_flags(&mut self, seq_number: u32, flags: TcpFlags) {
+        self.send_raw(seq_number, flags, &[])
     }
 
     /// Send a SYN packet (connection request).
@@ -206,7 +221,41 @@ impl<D: NetworkDevice> Socket<D> {
         }
     }
 
-    pub fn recv(&mut self, tcp: &Tcp, payload: &[u8]) {
+    pub fn send(&mut self, payload: &[u8]) -> Result<usize, Error> {
+        match self.state {
+            State::Closed => Err(Error::NotConnected),
+            State::Listen | State::SynSent | State::SynRecv => Err(Error::NoBufs),
+
+            State::Established | State::CloseWait => {
+                self.send_raw(self.send.nxt, TcpFlags::ACK | TcpFlags::PSH, payload);
+                Ok(payload.len())
+            }
+
+            State::LastAck | State::Closing | State::TimeWait => Ok(0),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn recv(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
+        match self.state {
+            State::Closed => Err(Error::NotConnected),
+            State::Listen | State::SynSent | State::SynRecv => Err(Error::NoBufs),
+
+            State::Established | State::CloseWait => {
+                let bytes_copy = buffer.len().min(self.recv_queue.len());
+
+                buffer[..bytes_copy].copy_from_slice(&self.recv_queue[..bytes_copy]);
+                self.recv_queue.drain(..bytes_copy);
+
+                Ok(bytes_copy)
+            }
+
+            State::LastAck | State::Closing | State::TimeWait => Ok(0),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn on_packet(&mut self, tcp: &Tcp, payload: &[u8]) {
         let flags = tcp.flags();
         let mut acceptable = false;
 
@@ -393,6 +442,7 @@ impl<D: NetworkDevice> Socket<D> {
                 self.recv.nxt = seq_number.wrapping_add(payload.len() as u32);
                 self.recv.wnd = u16::MAX;
 
+                self.recv_queue.extend_from_slice(payload);
                 log::debug!("unread_data: {:?}", payload);
                 self.send_with_flags(self.send.nxt, TcpFlags::ACK);
             }
@@ -459,7 +509,7 @@ impl RetransmitHandle {
 }
 
 pub trait NetworkDevice: Send + Sync {
-    fn send(&self, ipv4: Ipv4, tcp: Tcp, handle: RetransmitHandle);
+    fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle);
 
     /// Removes the retransmit handle from the retransmit queue.
     fn remove_retransmit(&self, seq_number: u32);

@@ -3,15 +3,6 @@ use std::sync::Arc;
 use netstack::network::{Ipv4, Ipv4Addr, Ipv4Type};
 use netstack::transport::{Tcp, TcpFlags};
 
-macro_rules! warn_on {
-    ($condition:expr, $($fmt:tt)*) => {
-        if $condition {
-            log::warn!("check `{}` failed with {}", stringify!($condition), $($fmt)*);
-            return;
-        }
-    };
-}
-
 #[derive(Default, Clone, PartialEq, Eq, Debug)]
 pub enum State {
     /// Waiting for a connection request from any remote TCP peer and port.
@@ -212,9 +203,19 @@ impl<D: NetworkDevice> Socket<D> {
     }
 
     pub fn recv(&mut self, tcp: &Tcp, payload: &[u8]) {
-        warn_on!(!self.validate_packet(tcp, payload), "invalid packet");
-
         let flags = tcp.flags();
+        let mut acceptable = false;
+
+        // Calculate the segment length.
+        let mut slen = payload.len() as u32;
+
+        if flags.contains(TcpFlags::SYN) {
+            slen += 1;
+        }
+
+        if flags.contains(TcpFlags::FIN) {
+            slen += 1;
+        }
 
         match self.state {
             State::Closed => return,
@@ -240,19 +241,132 @@ impl<D: NetworkDevice> Socket<D> {
 
                 // Keep track of the sender info.
                 self.recv.irs = tcp.sequence_number();
-                self.recv.nxt = tcp.sequence_number() + 1;
+                self.recv.nxt = tcp.sequence_number().wrapping_add(1);
                 self.recv.wnd = tcp.window();
 
                 // Initialize send sequence space.
                 self.send.iss = 0;
-                self.send.nxt = self.send.iss + 1;
+                self.send.nxt = self.send.iss.wrapping_add(1);
                 self.send.una = 0;
                 self.send.wnd = u16::MAX;
 
                 // Send SYN-ACK.
                 self.send_with_flags(self.send.iss, TcpFlags::SYN | TcpFlags::ACK);
+                return;
             }
 
+            State::SynSent => {
+                let ack_number = tcp.ack_number();
+
+                if flags.contains(TcpFlags::ACK) {
+                    if wrapping_lt(ack_number.wrapping_sub(1), self.send.iss)
+                        || wrapping_gt(ack_number, self.send.nxt)
+                    {
+                        if flags.contains(TcpFlags::RST) {
+                            // Drop the segment and return.
+                            return;
+                        }
+
+                        // Send a reset; drop the segment and return.
+                        self.send_with_flags(ack_number, TcpFlags::RST);
+                        return;
+                    }
+
+                    acceptable = is_between_wrapped(
+                        self.send.una.wrapping_sub(1),
+                        ack_number,
+                        self.send.nxt.wrapping_add(1),
+                    );
+                }
+
+                if flags.contains(TcpFlags::RST) {
+                    if acceptable {
+                        log::error!("[ TCP ] Connection Reset");
+                        self.state = State::Closed;
+                    }
+
+                    // Drop the segment and return.
+                    return;
+                }
+
+                if flags.contains(TcpFlags::ACK | TcpFlags::SYN) {
+                    self.recv.nxt = tcp.sequence_number().wrapping_add(1);
+                    self.recv.irs = tcp.sequence_number();
+
+                    if acceptable {
+                        self.send.una = tcp.ack_number();
+                    }
+
+                    if wrapping_gt(self.send.una, self.send.iss) {
+                        // TODO(andypython): Parse TCP options.
+                        self.send.wnd = tcp.window();
+                        self.send.wl1 = tcp.sequence_number() as usize;
+                        self.send.wl2 = tcp.ack_number() as usize;
+                        self.state = State::Established;
+
+                        self.send_with_flags(self.send.nxt, TcpFlags::ACK);
+                        return;
+                    } else {
+                        self.state = State::SynRecv;
+
+                        self.send_with_flags(self.send.iss, TcpFlags::SYN | TcpFlags::ACK);
+                        return;
+                    }
+                } else {
+                    // Bad segment; drop and return.
+                    return;
+                }
+            }
+
+            _ => {}
+        }
+
+        let wend = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
+        let seq_number = tcp.sequence_number();
+
+        // Valid segment check.
+        //
+        // ```text
+        // Length  Window
+        // ------- -------  -------------------------------------------
+        //
+        //    0       0     SEG.SEQ = RCV.NXT
+        //
+        //    0      >0     RCV.NXT =< SEG.SEQ < RCV.NXT+RCV.WND
+        //
+        //   >0       0     not acceptable
+        //
+        //   >0      >0     RCV.NXT =< SEG.SEQ < RCV.NXT+RCV.WND
+        //               or RCV.NXT =< SEG.SEQ+SEG.LEN-1 < RCV.NXT+RCV.WND
+        // ```
+        if (slen == 0)
+            && ((self.recv.wnd == 0 && seq_number == self.recv.nxt)
+                || is_between_wrapped(self.recv.nxt.wrapping_sub(1), seq_number, wend))
+        {
+            acceptable = true;
+        } else {
+            if self.recv.wnd == 0 {
+                acceptable = false;
+            } else if is_between_wrapped(self.recv.nxt.wrapping_sub(1), seq_number, wend)
+                || is_between_wrapped(
+                    self.recv.nxt.wrapping_sub(1),
+                    seq_number.wrapping_add(slen - 1),
+                    wend,
+                )
+            {
+                acceptable = true;
+            }
+        };
+
+        if !acceptable {
+            if !flags.contains(TcpFlags::RST) {
+                self.send_with_flags(self.send.nxt, TcpFlags::ACK);
+            }
+
+            return;
+        }
+
+        match self.state {
             State::SynRecv => {
                 if !flags.contains(TcpFlags::ACK) {
                     // Expected an ACK for the sent SYN.
@@ -261,25 +375,6 @@ impl<D: NetworkDevice> Socket<D> {
 
                 // ACKed the SYN (i.e, at least one acked byte and we have only sent the SYN).
                 self.state = State::Established;
-            }
-
-            State::SynSent => {
-                if flags.contains(TcpFlags::ACK | TcpFlags::SYN) {
-                    self.recv.nxt = tcp.sequence_number().wrapping_add(1);
-                    self.recv.irs = tcp.sequence_number();
-
-                    self.send.una = tcp.ack_number();
-
-                    if self.send.una > self.send.iss {
-                        // TODO(andypython): Parse TCP options.
-                        self.send.wnd = tcp.window();
-                        self.send.wl1 = tcp.sequence_number() as usize;
-                        self.send.wl2 = tcp.ack_number() as usize;
-                        self.state = State::Established;
-
-                        self.send_with_flags(self.send.nxt, TcpFlags::ACK);
-                    }
-                }
             }
 
             State::Established => {
@@ -315,76 +410,6 @@ impl<D: NetworkDevice> Socket<D> {
         }
     }
 
-    fn validate_packet(&self, tcp: &Tcp, payload: &[u8]) -> bool {
-        let flags = tcp.flags();
-
-        if let State::Closed | State::Listen | State::SynSent = self.state {
-            return true;
-        }
-
-        let ack_number = tcp.ack_number();
-        let seq_number = tcp.sequence_number();
-
-        let mut slen = payload.len() as u32;
-
-        if flags.contains(TcpFlags::SYN) {
-            slen += 1;
-        }
-
-        if flags.contains(TcpFlags::FIN) {
-            slen += 1;
-        }
-
-        let wend = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
-
-        // Valid segment check.
-        //
-        // ```text
-        // Length  Window
-        // ------- -------  -------------------------------------------
-        //
-        //    0       0     SEG.SEQ = RCV.NXT
-        //
-        //    0      >0     RCV.NXT =< SEG.SEQ < RCV.NXT+RCV.WND
-        //
-        //   >0       0     not acceptable
-        //
-        //   >0      >0     RCV.NXT =< SEG.SEQ < RCV.NXT+RCV.WND
-        //               or RCV.NXT =< SEG.SEQ+SEG.LEN-1 < RCV.NXT+RCV.WND
-        // ```
-        if slen == 0 {
-            if self.recv.wnd == 0 && seq_number != self.recv.nxt {
-                return false;
-            } else if !is_between_wrapped(self.recv.nxt.wrapping_sub(1), seq_number, wend) {
-                return false;
-            }
-        } else {
-            if self.recv.wnd == 0 {
-                return false;
-            } else if !is_between_wrapped(self.recv.nxt.wrapping_sub(1), seq_number, wend)
-                && !is_between_wrapped(
-                    self.recv.nxt.wrapping_sub(1),
-                    seq_number.wrapping_add(slen - 1),
-                    wend,
-                )
-            {
-                return false;
-            }
-        };
-
-        // Acceptable ACK check.
-        //      SND.UNA =< SEG.ACK =< SND.NXT
-        if !is_between_wrapped(
-            self.send.una.wrapping_sub(1),
-            ack_number,
-            self.send.nxt.wrapping_add(1),
-        ) {
-            return false;
-        }
-
-        true
-    }
-
     #[inline]
     pub fn state(&self) -> State {
         self.state.clone()
@@ -401,6 +426,11 @@ pub const fn wrapping_lt(lhs: u32, rhs: u32) -> bool {
     //     versa, the left edge of the sender's window has to be at most
     //     2**31 away from the right edge of the receiver's window.
     lhs.wrapping_sub(rhs) > 2 ^ 31
+}
+
+#[inline]
+pub const fn wrapping_gt(lhs: u32, rhs: u32) -> bool {
+    wrapping_lt(rhs, lhs)
 }
 
 #[inline]

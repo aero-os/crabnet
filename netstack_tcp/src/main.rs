@@ -7,6 +7,19 @@ use std::io;
 use std::sync::Arc;
 use tun_tap::{Iface, Mode};
 
+#[used]
+#[link_section = ".init_array"]
+static INIT_LOGGER: extern "C" fn() -> usize = {
+    /// Initializes the global logger with an env logger.
+    #[link_section = ".text.startup"]
+    extern "C" fn __init_logger() -> usize {
+        env_logger::init();
+        0
+    }
+
+    __init_logger
+};
+
 /// <https://www.kernel.org/doc/Documentation/networking/tuntap.txt>
 struct Tun(Iface);
 
@@ -25,8 +38,6 @@ impl NetworkDevice for Tun {
 }
 
 pub fn main() -> io::Result<()> {
-    env_logger::init();
-
     let iface = Iface::new("tun0", Mode::Tun)?;
     let device = Arc::new(Tun(iface));
 
@@ -63,8 +74,10 @@ pub fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod test {
+    use netstack::data_link;
     use netstack_tcp::State;
-    use std::ops::Deref;
+
+    use std::ops::{Deref, DerefMut};
 
     use super::*;
 
@@ -82,10 +95,14 @@ mod test {
 
             loop {
                 if let Ok(bytes_read) = device.0.recv(&mut buf) {
-                    // TODO: Check the first 4 bytes, the TUN header and discard if it's not IPv4.
-                    let packet = &buf[4..bytes_read];
+                    let mut packet_parser = PacketParser::new(&buf[..bytes_read]);
 
-                    let mut packet_parser = PacketParser::new(packet);
+                    let tun = packet_parser.next::<data_link::Tun>();
+
+                    if tun.typ != EthType::Ip {
+                        continue;
+                    }
+
                     let ipv4 = packet_parser.next::<Ipv4>();
 
                     if ipv4.protocol != Ipv4Type::Tcp {
@@ -108,6 +125,12 @@ mod test {
 
         fn deref(&self) -> &Self::Target {
             &self.0
+        }
+    }
+
+    impl DerefMut for SocketShim {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
         }
     }
 
@@ -152,13 +175,20 @@ mod test {
         Arc::new(Tun(iface))
     }
 
-    #[test]
-    fn simple_handshake() {
+    fn socket_pair() -> (SocketShim, SocketShim) {
         let device = tun_device();
 
-        let mut server = server_socket(device.clone());
-        let mut client = client_socket(device);
+        let server = server_socket(device.clone());
+        let client = client_socket(device);
 
+        (server, client)
+    }
+
+    #[test]
+    fn normal_connection() {
+        let (mut server, mut client) = socket_pair();
+
+        // Normal 3-way handshake.
         assert_eq!(server.state(), State::Listen);
         assert_eq!(client.state(), State::SynSent);
 
@@ -170,5 +200,12 @@ mod test {
 
         server.await_process();
         assert_eq!(server.state(), State::Established);
+
+        // Close the connection.
+        client.close();
+        assert_eq!(client.state(), State::FinWait1);
+
+        server.await_process();
+        assert_eq!(server.state(), State::CloseWait);
     }
 }

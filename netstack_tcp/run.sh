@@ -25,7 +25,7 @@ cargo build --release --bin netstack_tcp
 
 # CAP_NET_ADMIN: Allows to perform various network-related operations.
 sudo setcap CAP_NET_ADMIN=eip $EXE
-$EXE --nocapture
+RUST_LOG=trace $EXE --nocapture
 
 # RUST_LOG=debug $EXE --nocapture &
 # pid=$!

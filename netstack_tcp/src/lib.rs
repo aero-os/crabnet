@@ -1,9 +1,10 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use netstack::network::{Ipv4, Ipv4Addr, Ipv4Type};
 use netstack::transport::{Tcp, TcpFlags};
 
-#[derive(Default, Clone, PartialEq, Eq, Debug)]
+#[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]
 pub enum State {
     /// Waiting for a connection request from any remote TCP peer and port.
     #[default]
@@ -39,7 +40,7 @@ pub enum State {
 
 /// State of the Send Sequence Space (RFC 793 S3.2 F4)
 ///
-/// ```
+/// ```text
 ///            1         2          3          4
 ///       ----------|----------|----------|----------
 ///              SND.UNA    SND.NXT    SND.UNA
@@ -70,7 +71,7 @@ pub struct SendSequenceSpace {
 
 /// State of the Receive Sequence Space (RFC 793 S3.2 F5)
 ///
-/// ```
+/// ```text
 ///                1          2          3
 ///            ----------|----------|----------
 ///                   RCV.NXT    RCV.NXT
@@ -164,7 +165,10 @@ impl<D: NetworkDevice> Socket<D> {
             self.send.nxt = next_seq;
         }
 
-        self.device.send(ip, tcp);
+        let retransmit_duration = Duration::from_millis(100);
+        let retransmit_handle = RetransmitHandle::new(seq_number, retransmit_duration);
+
+        self.device.send(ip, tcp, retransmit_handle);
     }
 
     /// Send a SYN packet (connection request).
@@ -403,9 +407,9 @@ impl<D: NetworkDevice> Socket<D> {
                 }
 
                 // The segment sequence number cannot be validated. Drop the segment and return.
-                State::Closed | State::Listen | State::SynSent => return,
+                State::Closed | State::Listen | State::SynSent | State::CloseWait => return,
 
-                _ => unimplemented!(),
+                state => unimplemented!("<FIN> {state:?}"),
             }
         }
     }
@@ -438,6 +442,25 @@ pub const fn is_between_wrapped(start: u32, x: u32, end: u32) -> bool {
     wrapping_lt(start, x) && wrapping_lt(x, end)
 }
 
+pub struct RetransmitHandle {
+    pub seq_number: u32,
+
+    /// The duration to wait before retransmitting the packet.
+    pub duration: Duration,
+}
+
+impl RetransmitHandle {
+    pub fn new(seq_number: u32, duration: Duration) -> Self {
+        Self {
+            seq_number,
+            duration,
+        }
+    }
+}
+
 pub trait NetworkDevice: Send + Sync {
-    fn send(&self, ipv4: Ipv4, tcp: Tcp);
+    fn send(&self, ipv4: Ipv4, tcp: Tcp, handle: RetransmitHandle);
+
+    /// Removes the retransmit handle from the retransmit queue.
+    fn remove_retransmit(&self, seq_number: u32);
 }

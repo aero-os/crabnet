@@ -16,7 +16,7 @@ def verify_checksum(packet, layer):
 
 def main(args):
     raw_bytes = list(map(lambda x: int(x.strip()), args[0].split(',')))
-    packet = IP(bytes(raw_bytes))
+    packet = IP(bytes(raw_bytes[4:]))
     # del packet[UDP].chksum
     # del packet[IP].chksum
     # packet.show2()

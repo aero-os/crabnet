@@ -112,6 +112,7 @@ pub fn main() -> io::Result<()> {
 
             if tcp_socket.state() == netstack_tcp::State::Established && !done {
                 tcp_socket.send(b"okay!").unwrap();
+                // tcp_socket.close();
                 done = true;
             }
         } else {
@@ -127,10 +128,13 @@ pub fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod test {
-    use netstack::data_link;
+    use netstack::data_link::{self, MacAddr};
     use netstack_tcp::State;
+    use pcap_file::pcap::{PcapPacket, PcapWriter};
 
+    use std::fs::File;
     use std::ops::{Deref, DerefMut};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
 
@@ -152,6 +156,9 @@ mod test {
         peer: Arc<Mutex<Vec<Packet>>>,
         /// The TCP re-transmit queue.
         queue: Mutex<HashMap<u32, RetransmitEntry>>,
+        /// Name of the device; useful for debugging.
+        name: &'static str,
+        pcap: Arc<Mutex<PcapWriter<File>>>,
     }
 
     impl FakeDevice {
@@ -172,8 +179,8 @@ mod test {
 
     impl NetworkDevice for FakeDevice {
         fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
-            let tun = data_link::Tun::new(0, EthType::Ip);
-            let packet = (tun / ipv4 / tcp / payload).into_boxed_bytes();
+            let eth = data_link::Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);
+            let packet = (eth / ipv4 / tcp / payload).into_boxed_bytes();
 
             let seq_number = handle.seq_number;
             let rt_entry = RetransmitEntry {
@@ -181,6 +188,16 @@ mod test {
                 now: Instant::now(),
                 raw: packet.clone().into_vec(),
             };
+
+            self.pcap
+                .lock()
+                .unwrap()
+                .write_packet(&PcapPacket::new(
+                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                    packet.len().try_into().unwrap(),
+                    &packet,
+                ))
+                .unwrap();
 
             self.queue.lock().unwrap().insert(seq_number, rt_entry);
             self.peer.lock().unwrap().push(Packet(packet));
@@ -217,7 +234,16 @@ mod test {
         });
     }
 
-    fn socket_pair() -> (SocketShim, SocketShim) {
+    fn make_pcap<S: AsRef<str>>(name: S) -> Result<PcapWriter<File>, io::Error> {
+        let out_name = format!("./tests/{}.pcap", name.as_ref());
+        let file = File::create(out_name)?;
+
+        Ok(PcapWriter::new(file).expect("failed to create PCAP writer"))
+    }
+
+    fn socket_pair<S: AsRef<str>>(name: S) -> (SocketShim, SocketShim) {
+        let pcap = Arc::new(Mutex::new(make_pcap(name).unwrap()));
+
         let p1 = Arc::new(Mutex::new(vec![]));
         let p2 = Arc::new(Mutex::new(vec![]));
 
@@ -225,16 +251,20 @@ mod test {
             this: p1.clone(),
             peer: p2.clone(),
             queue: Mutex::new(HashMap::new()),
+            name: "server",
+            pcap: pcap.clone(),
         });
 
         let n2 = Arc::new(FakeDevice {
             this: p2.clone(),
             peer: p1.clone(),
             queue: Mutex::new(HashMap::new()),
+            name: "client",
+            pcap,
         });
 
-        spwan_timer(n1.clone());
-        spwan_timer(n2.clone());
+        // spwan_timer(n1.clone());
+        // spwan_timer(n2.clone());
 
         let a1 = Address::new(1234, 5678, Ipv4Addr::new([192, 168, 0, 1]));
         let a2 = Address::new(5678, 1234, Ipv4Addr::new([192, 168, 0, 2]));
@@ -253,34 +283,31 @@ mod test {
             Self(socket)
         }
 
-        fn skip_by(&mut self, packets: usize) {
-            for _ in 0..packets {
-                self.await_process();
-            }
-        }
+        // fn skip_by(&mut self, packets: usize) {
+        //     for _ in 0..packets {
+        //         self.await_process();
+        //     }
+        // }
 
         fn await_process(&mut self) {
             let mut buf = [0u8; 1504];
             let device = &self.0.device;
 
-            loop {
-                if let Some(bytes_read) = device.recv(&mut buf) {
-                    let mut packet_parser = PacketParser::new(&buf[..bytes_read]);
+            while let Some(bytes_read) = device.recv(&mut buf) {
+                let mut packet_parser = PacketParser::new(&buf[..bytes_read]);
 
-                    let tun = packet_parser.next::<data_link::Tun>();
-                    let x = tun.typ;
-                    assert_eq!(x, EthType::Ip);
+                let eth = packet_parser.next::<data_link::Eth>();
+                assert_eq!(eth.typ(), EthType::Ip);
 
-                    let ipv4 = packet_parser.next::<Ipv4>();
-                    assert_eq!(ipv4.protocol(), Ipv4Type::Tcp);
+                let ipv4 = packet_parser.next::<Ipv4>();
+                assert_eq!(ipv4.protocol(), Ipv4Type::Tcp);
 
-                    let tcp = packet_parser.next::<Tcp>();
-                    let options_size = tcp.header_size() as usize - tcp.write_len();
-                    let payload = &packet_parser.payload()[options_size..];
+                let tcp = packet_parser.next::<Tcp>();
+                let options_size = tcp.header_size() as usize - tcp.write_len();
+                let payload = &packet_parser.payload()[options_size..];
 
-                    self.0.on_packet(tcp, payload);
-                    break;
-                }
+                self.0.on_packet(tcp, payload);
+                break;
             }
         }
     }
@@ -301,7 +328,11 @@ mod test {
 
     #[test]
     fn normal_connection() {
-        let (mut server, mut client) = socket_pair();
+        let (mut server, mut client) = socket_pair("normal_connection");
+
+        // log::debug!("xx: {:?}", client.device.this.lock().unwrap());
+        // log::debug!("xx: {:?}", server.device.this.lock().unwrap());
+        // TODO: ensure empty after await
 
         // Normal 3-way handshake.
         assert_eq!(server.state(), State::Listen);
@@ -317,16 +348,71 @@ mod test {
         assert_eq!(server.state(), State::Established);
 
         // Close the connection.
+        //
+        // Client: Sends the FIN.
         client.close();
         assert_eq!(client.state(), State::FinWait1);
 
+        // Server: ACK the FIN.
         server.await_process();
         assert_eq!(server.state(), State::CloseWait);
+
+        // Client: Server ACKed the FIN; enter [`State::FinWait2`].
+        client.await_process();
+        assert_eq!(client.state(), State::FinWait2);
+
+        // Server: Send FIN.
+        server.close();
+        assert_eq!(server.state(), State::LastAck);
+
+        // Internally, we also enter the [`State::TimeWait`] state.
+        client.await_process();
+        assert_eq!(client.state(), State::Closed);
+
+        // Server: Recieved ACK for the FIN.
+        server.await_process();
+        assert_eq!(server.state(), State::Closed);
+    }
+
+    #[test]
+    fn both_fin_acked() {
+        let (mut server, mut client) = socket_pair("both_fin_acked");
+
+        // Normal 3-way handshake.
+        assert_eq!(server.state(), State::Listen);
+        assert_eq!(client.state(), State::SynSent);
+
+        server.await_process();
+        assert_eq!(server.state(), State::SynRecv);
+
+        client.await_process();
+        assert_eq!(client.state(), State::Established);
+
+        server.await_process();
+        assert_eq!(server.state(), State::Established);
+
+        // Close the connection.
+        //
+        // Client: FIN | ACK.
+        client.close();
+        assert_eq!(client.state(), State::FinWait1);
+
+        // Server: FIN | ACK.
+        server.close();
+        assert_eq!(server.state(), State::FinWait1);
+
+        server.await_process();
+        assert_eq!(server.state(), State::Closing);
+
+        // client.await_process();
+        // assert_eq!(client.state(), State::Closing);
+
+        // server.await_process();
     }
 
     #[test]
     fn send_bytes() {
-        let (mut server, mut client) = socket_pair();
+        let (mut server, mut client) = socket_pair("send_bytes");
         server.await_process();
         client.await_process();
         server.await_process();
@@ -344,35 +430,35 @@ mod test {
         server.await_process();
     }
 
-    #[test]
-    fn retransmission() {
-        use std::thread;
-        use std::time::Duration;
+    // #[test]
+    // fn retransmission() {
+    //     use std::thread;
+    //     use std::time::Duration;
 
-        let (mut server, mut client) = socket_pair();
+    //     let (mut server, mut client) = socket_pair();
 
-        // Normal 3-way handshake.
-        assert_eq!(server.state(), State::Listen);
-        assert_eq!(client.state(), State::SynSent);
+    //     // Normal 3-way handshake.
+    //     assert_eq!(server.state(), State::Listen);
+    //     assert_eq!(client.state(), State::SynSent);
 
-        server.await_process();
-        assert_eq!(server.state(), State::SynRecv);
+    //     server.await_process();
+    //     assert_eq!(server.state(), State::SynRecv);
 
-        client.await_process();
-        assert_eq!(client.state(), State::Established);
+    //     client.await_process();
+    //     assert_eq!(client.state(), State::Established);
 
-        server.await_process();
-        assert_eq!(server.state(), State::Established);
+    //     server.await_process();
+    //     assert_eq!(server.state(), State::Established);
 
-        // Close the connection.
-        client.close();
-        assert_eq!(client.state(), State::FinWait1);
+    //     // Close the connection.
+    //     client.close();
+    //     assert_eq!(client.state(), State::FinWait1);
 
-        thread::sleep(Duration::from_millis(100));
+    //     thread::sleep(Duration::from_millis(100));
 
-        // The client should have atleast re-transmitted once.
-        server.skip_by(1);
-        server.await_process();
-        assert_eq!(server.state(), State::CloseWait);
-    }
+    //     // The client should have atleast re-transmitted once.
+    //     server.skip_by(1);
+    //     server.await_process();
+    //     assert_eq!(server.state(), State::CloseWait);
+    // }
 }

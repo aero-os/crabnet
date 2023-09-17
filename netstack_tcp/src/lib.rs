@@ -62,9 +62,9 @@ pub struct SendSequenceSpace {
     /// Send urgent pointer.
     pub up: bool,
     /// Segment sequence number used for last window update.
-    pub wl1: usize,
+    pub wl1: u32,
     /// Segment acknowledgment number used for last window update.
-    pub wl2: usize,
+    pub wl2: u32,
     /// Initial send sequence number.
     pub iss: u32,
 }
@@ -150,6 +150,8 @@ impl<D: NetworkDevice> Socket<D> {
             addr: address,
         };
 
+        // TODO: Actually set to something what we can handle.
+        socket.recv.wnd = u16::MAX;
         socket.send_syn();
         socket
     }
@@ -191,6 +193,16 @@ impl<D: NetworkDevice> Socket<D> {
         self.send.wnd = u16::MAX;
         self.send_with_flags(self.send.nxt, TcpFlags::SYN);
         self.state = State::SynSent;
+    }
+
+    /// ## Panics
+    /// This function panics if the socket is not in the [`State::TimeWait`] state.
+    fn do_timewait(&mut self) {
+        assert_eq!(self.state, State::TimeWait);
+
+        log::info!("[ TCP ] Closing connection");
+        // TODO: Wait for 2MSL. Which is (2 * maximum segment lifetime).
+        self.state = State::Closed;
     }
 
     pub fn close(&mut self) {
@@ -353,8 +365,8 @@ impl<D: NetworkDevice> Socket<D> {
                     if wrapping_gt(self.send.una, self.send.iss) {
                         // TODO(andypython): Parse TCP options.
                         self.send.wnd = tcp.window();
-                        self.send.wl1 = tcp.sequence_number() as usize;
-                        self.send.wl2 = tcp.ack_number() as usize;
+                        self.send.wl1 = tcp.sequence_number();
+                        self.send.wl2 = tcp.ack_number();
                         self.state = State::Established;
 
                         self.send_with_flags(self.send.nxt, TcpFlags::ACK);
@@ -419,6 +431,8 @@ impl<D: NetworkDevice> Socket<D> {
             return;
         }
 
+        assert!(flags.contains(TcpFlags::ACK));
+
         match self.state {
             State::SynRecv => {
                 if !flags.contains(TcpFlags::ACK) {
@@ -430,7 +444,59 @@ impl<D: NetworkDevice> Socket<D> {
                 self.state = State::Established;
             }
 
-            State::Established => {
+            State::Established
+            | State::FinWait1
+            | State::FinWait2
+            | State::CloseWait
+            | State::Closing => {
+                if is_between_wrapped(
+                    self.send.una.wrapping_sub(1),
+                    tcp.ack_number(),
+                    self.send.nxt.wrapping_add(1),
+                ) {
+                    self.send.una = tcp.ack_number();
+                    // TODO:
+                    //     Any segments on the retransmission queue that are thereby entirely
+                    //     acknowledged are removed. Users should receive positive acknowledgments
+                    //     for buffers that have been SENT and fully acknowledged (i.e., SEND buffer
+                    //     should be returned with "ok" response).
+
+                    if wrapping_lt(self.send.wl1, tcp.sequence_number())
+                        || (self.send.wl1 == tcp.sequence_number()
+                            && wrapping_lt(self.send.wl2.wrapping_sub(1), tcp.ack_number()))
+                    {
+                        self.send.wnd = tcp.window();
+                        self.send.wl1 = tcp.sequence_number();
+                        self.send.wl2 = tcp.ack_number();
+                    }
+                } else if wrapping_gt(tcp.ack_number(), self.send.nxt) {
+                    self.send_with_flags(self.send.nxt, TcpFlags::ACK);
+                    return;
+                }
+
+                if let State::FinWait1 = self.state {
+                    if tcp.ack_number() == self.send.nxt {
+                        self.state = State::FinWait2;
+                    }
+                } else if let State::Closing = self.state {
+                    todo!()
+                }
+            }
+
+            State::LastAck => {
+                // The only thing that can arrive in this state is an acknowledgment of our FIN. If
+                // our FIN is now acknowledged enter [`State::Closed`].
+                if tcp.ack_number() == self.send.nxt {
+                    self.state = State::Closed;
+                    return;
+                }
+            }
+
+            state => todo!("{state:?}"),
+        }
+
+        match self.state {
+            State::Established if !payload.is_empty() => {
                 let seq_number = tcp.sequence_number();
                 if seq_number != self.recv.nxt {
                     log::warn!("[ TCP ] Recieved out of order packet");
@@ -456,11 +522,29 @@ impl<D: NetworkDevice> Socket<D> {
                     self.state = State::CloseWait;
                 }
 
-                // The segment sequence number cannot be validated. Drop the segment and return.
-                State::Closed | State::Listen | State::SynSent | State::CloseWait => return,
+                State::FinWait1 => {
+                    // Enter [`State::TimeWait`] if our FIN is now acknowledged.
+                    if tcp.ack_number() == self.send.nxt {
+                        self.state = State::TimeWait;
+                        self.do_timewait();
+                    } else {
+                        self.state = State::Closing;
+                    }
+                }
 
+                State::FinWait2 => {
+                    self.state = State::TimeWait;
+                    self.do_timewait();
+                }
+
+                State::TimeWait => todo!("restart the 2 MSL time-wait timeout"),
+
+                State::CloseWait | State::Closing | State::LastAck => {}
                 state => unimplemented!("<FIN> {state:?}"),
             }
+
+            self.recv.nxt = tcp.sequence_number().wrapping_add(1);
+            self.send_with_flags(self.send.nxt, TcpFlags::ACK);
         }
     }
 

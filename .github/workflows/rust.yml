@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_LOG: trace
 
 jobs:
   build:
@@ -16,7 +17,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Build
+    - name: Build `netstack`
       run: cargo build --verbose
-    - name: Run tests
+    - name: Run tests for `netstack`
       run: cargo test --verbose
+    - name: Build `netstack_tcp`
+      run: cargo build --verbose --manifest-path netstack_tcp/Cargo.toml
+    - name: Run tests for `netstack_tcp`
+      run: cargo test --verbose --manifest-path netstack_tcp/Cargo.toml

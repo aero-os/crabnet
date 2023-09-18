@@ -136,9 +136,11 @@ mod test {
     use netstack_tcp::State;
     use pcap_file::pcap::{PcapPacket, PcapWriter};
 
-    use std::fs::File;
+    use std::fs::OpenOptions;
+    use std::io::{Read, Write};
     use std::ops::{Deref, DerefMut};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::path::PathBuf;
+    use std::time::Duration;
 
     use super::*;
 
@@ -146,6 +148,54 @@ mod test {
         handle: RetransmitHandle,
         now: Instant,
         raw: Vec<u8>,
+    }
+
+    struct TestGuard {
+        path: PathBuf,
+        pcap: Arc<Mutex<Option<PcapWriter<Vec<u8>>>>>,
+    }
+
+    impl TestGuard {
+        pub fn new<S: AsRef<str>>(
+            name: S,
+            writer: Arc<Mutex<Option<PcapWriter<Vec<u8>>>>>,
+        ) -> Self {
+            let path = format!("./tests/{}.pcap", name.as_ref());
+
+            Self {
+                path: PathBuf::from(path),
+                pcap: writer,
+            }
+        }
+
+        pub fn check(&self, expected: &[u8]) -> Result<(), io::Error> {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .read(true)
+                .open(&self.path)?;
+
+            let mut contents = vec![];
+
+            file.read_to_end(&mut contents)?;
+
+            if contents.is_empty() {
+                // It is the first time we are running this test. Write the expected bytes to the
+                // file.
+                file.write_all(expected)?;
+                return Ok(());
+            }
+
+            assert_eq!(contents, expected);
+            Ok(())
+        }
+    }
+
+    impl Drop for TestGuard {
+        fn drop(&mut self) {
+            let writer = self.pcap.lock().unwrap().take().unwrap().into_writer();
+            self.check(&writer).unwrap();
+        }
     }
 
     /// A network packet.
@@ -162,7 +212,7 @@ mod test {
         queue: Mutex<HashMap<u32, RetransmitEntry>>,
         /// Name of the device; useful for debugging.
         name: &'static str,
-        pcap: Arc<Mutex<PcapWriter<File>>>,
+        pcap: Arc<Mutex<Option<PcapWriter<Vec<u8>>>>>,
     }
 
     impl FakeDevice {
@@ -196,8 +246,10 @@ mod test {
             self.pcap
                 .lock()
                 .unwrap()
+                .as_mut()
+                .unwrap()
                 .write_packet(&PcapPacket::new(
-                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                    Duration::from_millis(0),
                     packet.len().try_into().unwrap(),
                     &packet,
                 ))
@@ -215,7 +267,6 @@ mod test {
     /// Spawns a timer thread for the given device.
     fn spwan_timer(device: Arc<FakeDevice>) {
         use std::thread;
-        use std::time::Duration;
 
         thread::spawn(move || loop {
             let now = Instant::now();
@@ -238,15 +289,10 @@ mod test {
         });
     }
 
-    fn make_pcap<S: AsRef<str>>(name: S) -> Result<PcapWriter<File>, io::Error> {
-        let out_name = format!("./tests/{}.pcap", name.as_ref());
-        let file = File::create(out_name)?;
-
-        Ok(PcapWriter::new(file).expect("failed to create PCAP writer"))
-    }
-
-    fn socket_pair<S: AsRef<str>>(name: S) -> (SocketShim, SocketShim) {
-        let pcap = Arc::new(Mutex::new(make_pcap(name).unwrap()));
+    fn socket_pair<S: AsRef<str>>(name: S) -> (SocketShim, SocketShim, TestGuard) {
+        let buffer = vec![];
+        let pcap_writer = PcapWriter::new(buffer).expect("failed to create PCAP writer");
+        let pcap = Arc::new(Mutex::new(Some(pcap_writer)));
 
         let p1 = Arc::new(Mutex::new(vec![]));
         let p2 = Arc::new(Mutex::new(vec![]));
@@ -264,7 +310,7 @@ mod test {
             peer: p1.clone(),
             queue: Mutex::new(HashMap::new()),
             name: "client",
-            pcap,
+            pcap: pcap.clone(),
         });
 
         // spwan_timer(n1.clone());
@@ -276,6 +322,7 @@ mod test {
         (
             SocketShim::new(TcpSocket::new(n1, a1)),
             SocketShim::new(TcpSocket::connect(n2, a2)),
+            TestGuard::new(name, pcap.clone()),
         )
     }
 
@@ -332,7 +379,7 @@ mod test {
 
     #[test]
     fn normal_connection() {
-        let (mut server, mut client) = socket_pair("normal_connection");
+        let (mut server, mut client, _guard) = socket_pair("normal_connection");
 
         // Normal 3-way handshake.
         assert_eq!(server.state(), State::Listen);
@@ -377,7 +424,7 @@ mod test {
     // RFC 9293 S3.6 F13 (Simultaneous Close Sequence)
     #[test]
     fn simultaneous_close() {
-        let (mut server, mut client) = socket_pair("simultaneous_close");
+        let (mut server, mut client, _guard) = socket_pair("simultaneous_close");
 
         // Normal 3-way handshake.
         assert_eq!(server.state(), State::Listen);
@@ -419,7 +466,7 @@ mod test {
 
     #[test]
     fn send_bytes() {
-        let (mut server, mut client) = socket_pair("send_bytes");
+        let (mut server, mut client, _guard) = socket_pair("send_bytes");
         server.await_process();
         client.await_process();
         server.await_process();

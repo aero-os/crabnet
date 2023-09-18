@@ -128,6 +128,10 @@ pub fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod test {
+    // log::debug!("xx: {:?}", client.device.this.lock().unwrap());
+    // log::debug!("xx: {:?}", server.device.this.lock().unwrap());
+    // TODO: ensure empty after await
+
     use netstack::data_link::{self, MacAddr};
     use netstack_tcp::State;
     use pcap_file::pcap::{PcapPacket, PcapWriter};
@@ -330,10 +334,6 @@ mod test {
     fn normal_connection() {
         let (mut server, mut client) = socket_pair("normal_connection");
 
-        // log::debug!("xx: {:?}", client.device.this.lock().unwrap());
-        // log::debug!("xx: {:?}", server.device.this.lock().unwrap());
-        // TODO: ensure empty after await
-
         // Normal 3-way handshake.
         assert_eq!(server.state(), State::Listen);
         assert_eq!(client.state(), State::SynSent);
@@ -374,9 +374,10 @@ mod test {
         assert_eq!(server.state(), State::Closed);
     }
 
+    // RFC 9293 S3.6 F13 (Simultaneous Close Sequence)
     #[test]
-    fn both_fin_acked() {
-        let (mut server, mut client) = socket_pair("both_fin_acked");
+    fn simultaneous_close() {
+        let (mut server, mut client) = socket_pair("simultaneous_close");
 
         // Normal 3-way handshake.
         assert_eq!(server.state(), State::Listen);
@@ -401,13 +402,19 @@ mod test {
         server.close();
         assert_eq!(server.state(), State::FinWait1);
 
+        // ACK the FIN.
         server.await_process();
         assert_eq!(server.state(), State::Closing);
 
-        // client.await_process();
-        // assert_eq!(client.state(), State::Closing);
+        // ACK the FIN.
+        client.await_process();
+        assert_eq!(client.state(), State::Closing);
 
-        // server.await_process();
+        server.await_process();
+        assert_eq!(server.state(), State::Closed);
+
+        client.await_process();
+        assert_eq!(client.state(), State::Closed);
     }
 
     #[test]

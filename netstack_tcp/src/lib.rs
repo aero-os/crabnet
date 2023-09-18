@@ -479,7 +479,10 @@ impl<D: NetworkDevice> Socket<D> {
                         self.state = State::FinWait2;
                     }
                 } else if let State::Closing = self.state {
-                    todo!()
+                    if tcp.ack_number() == self.send.nxt {
+                        self.state = State::TimeWait;
+                        self.do_timewait();
+                    }
                 }
             }
 

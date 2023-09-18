@@ -409,18 +409,16 @@ impl<D: NetworkDevice> Socket<D> {
                 || is_between_wrapped(self.recv.nxt.wrapping_sub(1), seq_number, wend))
         {
             acceptable = true;
-        } else {
-            if self.recv.wnd == 0 {
-                acceptable = false;
-            } else if is_between_wrapped(self.recv.nxt.wrapping_sub(1), seq_number, wend)
-                || is_between_wrapped(
-                    self.recv.nxt.wrapping_sub(1),
-                    seq_number.wrapping_add(slen - 1),
-                    wend,
-                )
-            {
-                acceptable = true;
-            }
+        } else if self.recv.wnd == 0 {
+            acceptable = false;
+        } else if is_between_wrapped(self.recv.nxt.wrapping_sub(1), seq_number, wend)
+            || is_between_wrapped(
+                self.recv.nxt.wrapping_sub(1),
+                seq_number.wrapping_add(slen - 1),
+                wend,
+            )
+        {
+            acceptable = true;
         };
 
         if !acceptable {
@@ -553,7 +551,7 @@ impl<D: NetworkDevice> Socket<D> {
 
     #[inline]
     pub fn state(&self) -> State {
-        self.state.clone()
+        self.state
     }
 }
 

@@ -41,6 +41,18 @@ impl Eth {
             typ,
         }
     }
+
+    #[inline]
+    pub fn set_dest_mac(mut self, mac: MacAddr) -> Self {
+        self.dest_mac = mac;
+        self
+    }
+
+    #[inline]
+    pub fn set_src_mac(mut self, mac: MacAddr) -> Self {
+        self.src_mac = mac;
+        self
+    }
 }
 
 unsafe impl StackingAnchor<Eth> for Eth {}
@@ -134,22 +146,34 @@ pub enum ArpOpcode {
 
 #[repr(C, packed)]
 pub struct Arp {
-    pub htype: ArpHardwareType,
-    pub ptype: EthType,
+    htype: ArpHardwareType,
+    ptype: EthType,
     /// Length in octets of a hardware address.
     pub hlen: BigEndian<u8>,
     /// Length in octets of an internetwork address.
     pub plen: BigEndian<u8>,
-    pub opcode: ArpOpcode,
-    pub src_mac: MacAddr,
-    pub src_ip: Ipv4Addr,
-    pub dest_mac: MacAddr,
-    pub dest_ip: Ipv4Addr,
+    opcode: ArpOpcode,
+    src_mac: MacAddr,
+    src_ip: Ipv4Addr,
+    dest_mac: MacAddr,
+    dest_ip: Ipv4Addr,
 }
 
 const_assert_eq!(core::mem::size_of::<Arp>(), 28);
 
 impl Arp {
+    crate::impl_stack!(
+        @getter
+
+        dest_mac: MacAddr as MacAddr,
+        src_mac: MacAddr as MacAddr,
+        opcode: ArpOpcode as ArpOpcode,
+        src_ip: Ipv4Addr as Ipv4Addr,
+        dest_ip: Ipv4Addr as Ipv4Addr,
+        htype: ArpHardwareType as ArpHardwareType,
+        ptype: EthType as EthType
+    );
+
     /// Creates a new ARP header,
     pub fn new(
         htype: ArpHardwareType,

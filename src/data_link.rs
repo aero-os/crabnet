@@ -24,8 +24,8 @@ pub enum EthType {
 // Eth
 #[repr(C, packed)]
 pub struct Eth {
-    dest_mac: MacAddr,
-    src_mac: MacAddr,
+    pub dest_mac: MacAddr,
+    pub src_mac: MacAddr,
     typ: EthType,
 }
 

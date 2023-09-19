@@ -1,8 +1,14 @@
+#![feature(async_fn_in_trait, return_position_impl_trait_in_trait)]
+
+use core::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use netstack::network::{Ipv4, Ipv4Addr, Ipv4Type};
 use netstack::transport::{Tcp, TcpFlags};
+use netstack::IntoBoxedBytes;
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]
 pub enum State {
@@ -119,24 +125,88 @@ pub enum Error {
     NoBufs,
 }
 
+struct Queue<T: Unpin> {
+    queue: Vec<T>,
+    wakers: Vec<Waker>,
+}
+
+impl<T: Unpin + Copy> Queue<T> {
+    fn new() -> Self {
+        Self {
+            queue: Vec::new(),
+            wakers: Vec::new(),
+        }
+    }
+
+    async fn write(&mut self, buffer: &[T]) {
+        self.queue.extend_from_slice(buffer);
+
+        for waker in self.wakers.drain(..) {
+            waker.wake();
+        }
+    }
+
+    async fn read(&mut self, buffer: &mut [T]) -> usize {
+        Read(self, buffer).await
+    }
+}
+
+struct Read<'a, T: Unpin + Copy>(&'a mut Queue<T>, &'a mut [T]);
+
+impl<'a, T: Unpin + Copy> Read<'a, T> {
+    fn poll_once(&mut self) -> Poll<usize> {
+        if self.0.queue.is_empty() {
+            Poll::Pending
+        } else {
+            let bytes_copy = self.0.queue.len().min(self.1.len());
+            self.1[..bytes_copy].copy_from_slice(&self.0.queue[..bytes_copy]);
+            self.0.queue.drain(..bytes_copy);
+            Poll::Ready(bytes_copy)
+        }
+    }
+}
+
+impl<'a, T: Unpin + Copy> Future for Read<'a, T> {
+    type Output = usize;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        if let Poll::Ready(item) = this.poll_once() {
+            Poll::Ready(item)
+        } else {
+            // There might have be an item pushed into the queue right before we registered the
+            // waker. Poll again to ensure that we have not missed any notifications.
+            this.0.wakers.push(cx.waker().clone());
+            this.poll_once()
+        }
+    }
+}
+
 pub struct Socket<D: NetworkDevice> {
     state: State,
     recv: RecvSequenceSpace,
     send: SendSequenceSpace,
-    recv_queue: Vec<u8>,
+    recv_queue: Queue<u8>,
     addr: Address,
     pub device: Arc<D>,
+
+    timewait_task: Option<D::TaskHandle>,
+    rt_queue: Vec<(u32, D::TaskHandle)>,
 }
 
-impl<D: NetworkDevice> Socket<D> {
+impl<D: NetworkDevice + 'static> Socket<D> {
     pub fn new(device: Arc<D>, address: Address) -> Self {
         Self {
             device,
             recv: RecvSequenceSpace::default(),
             send: SendSequenceSpace::default(),
             state: State::default(),
-            recv_queue: Vec::new(),
+            recv_queue: Queue::new(),
             addr: address,
+
+            timewait_task: None,
+            rt_queue: Vec::new(),
         }
     }
 
@@ -146,8 +216,11 @@ impl<D: NetworkDevice> Socket<D> {
             recv: RecvSequenceSpace::default(),
             send: SendSequenceSpace::default(),
             state: State::default(),
-            recv_queue: Vec::new(),
+            recv_queue: Queue::new(),
             addr: address,
+
+            rt_queue: Vec::new(),
+            timewait_task: None,
         };
 
         // TODO: Actually set to something what we can handle.
@@ -157,16 +230,20 @@ impl<D: NetworkDevice> Socket<D> {
     }
 
     pub fn send_raw(&mut self, seq_number: u32, flags: TcpFlags, payload: &[u8]) {
-        let mut next_seq = seq_number.wrapping_add(payload.len() as u32);
+        let mut slen = payload.len() as u32;
+
         if flags.contains(TcpFlags::SYN) {
-            next_seq = next_seq.wrapping_add(1);
+            slen += 1;
         }
 
         if flags.contains(TcpFlags::FIN) {
-            next_seq = next_seq.wrapping_add(1);
+            slen += 1;
         }
 
-        let ip = Ipv4::new(Ipv4Addr::NULL, self.addr.dest_ip, Ipv4Type::Tcp);
+        let next_seq = seq_number.wrapping_add(slen);
+
+        // FIXME(andypython): use device.ip_addr() instead of hardcoded value.
+        let ip = Ipv4::new(self.device.ip_addr(), self.addr.dest_ip, Ipv4Type::Tcp);
         let tcp = Tcp::new(self.addr.src_port, self.addr.dest_port)
             .set_flags(flags)
             .set_window(self.send.wnd)
@@ -177,15 +254,43 @@ impl<D: NetworkDevice> Socket<D> {
             self.send.nxt = next_seq;
         }
 
-        let retransmit_duration = Duration::from_millis(100);
-        let retransmit_handle = RetransmitHandle::new(seq_number, retransmit_duration);
+        let device = self.device.clone();
+        let data = (ip / tcp / payload).into_boxed_bytes();
 
-        self.device.send(ip, tcp, payload, retransmit_handle);
+        device.send(&data);
+
+        if slen != 0 {
+            let handle = D::spawn_task(async move {
+                let mut expiry = Duration::from_millis(200);
+
+                loop {
+                    device.sleep(expiry).await;
+                    device.send(&data);
+
+                    expiry *= 2;
+                }
+            });
+
+            self.rt_queue.push((seq_number, handle));
+        }
     }
 
     #[inline]
     pub fn send_with_flags(&mut self, seq_number: u32, flags: TcpFlags) {
         self.send_raw(seq_number, flags, &[])
+    }
+
+    /// Cleans up the retransmission queue.
+    fn cleanup_rt_queue(&mut self) {
+        self.rt_queue.retain(|(seq_number, task_handle)| {
+            let has_acked = *seq_number <= self.send.una;
+
+            if has_acked {
+                task_handle.cancel();
+            }
+
+            has_acked
+        });
     }
 
     /// Send a SYN packet (connection request).
@@ -195,17 +300,59 @@ impl<D: NetworkDevice> Socket<D> {
         self.state = State::SynSent;
     }
 
+    /// Starts the timewait timer as a new asynchronous task.
+    ///
+    /// If the timer task is already running, it will be cancelled and a new one will be started.
+    ///
     /// ## Panics
     /// This function panics if the socket is not in the [`State::TimeWait`] state.
-    fn do_timewait(&mut self) {
+    async fn do_timewait(&mut self) {
         assert_eq!(self.state, State::TimeWait);
 
-        log::info!("[ TCP ] Closing connection");
-        // TODO: Wait for 2MSL. Which is (2 * maximum segment lifetime).
-        self.state = State::Closed;
+        if let Some(task) = self.timewait_task.take() {
+            task.cancel();
+        }
+
+        let device = self.device.clone();
+        let handle = D::spawn_task(async move {
+            // TODO: 2MSL
+            device.sleep(Duration::from_secs(2)).await;
+        });
+
+        self.timewait_task = Some(handle);
+    }
+
+    /// Checks if the timewait timer has expired and updates the state accordingly.
+    fn check_timers(&mut self) {
+        match self.timewait_task.as_ref() {
+            Some(task) if task.is_finished() => {
+                self.timewait_task = None;
+                self.state = State::Closed;
+            }
+
+            _ => {}
+        }
+    }
+
+    /// Cancels the timewait timer and sets the state to [`State::Closed`].
+    ///
+    /// ## Panics
+    /// This function panics if the socket is not in the [`State::TimeWait`] state.
+    pub fn cancel_timewait(&mut self) {
+        assert_eq!(self.state, State::TimeWait);
+
+        if let Some(task) = self.timewait_task.take() {
+            task.cancel();
+            self.state = State::Closed;
+        } else {
+            // The timer might have already expired. In that case, the state should be already set
+            // to [`State::Closed`] so, we don't need to do anything.
+        }
     }
 
     pub fn close(&mut self) {
+        self.check_timers();
+
         match self.state {
             // connection already closed.
             State::Closed => return,
@@ -234,6 +381,8 @@ impl<D: NetworkDevice> Socket<D> {
     }
 
     pub fn send(&mut self, payload: &[u8]) -> Result<usize, Error> {
+        self.check_timers();
+
         match self.state {
             State::Closed => Err(Error::NotConnected),
             State::Listen | State::SynSent | State::SynRecv => Err(Error::NoBufs),
@@ -248,26 +397,21 @@ impl<D: NetworkDevice> Socket<D> {
         }
     }
 
-    pub fn recv(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
+    pub async fn recv(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
+        self.check_timers();
+
         match self.state {
             State::Closed => Err(Error::NotConnected),
             State::Listen | State::SynSent | State::SynRecv => Err(Error::NoBufs),
-
-            State::Established | State::CloseWait => {
-                let bytes_copy = buffer.len().min(self.recv_queue.len());
-
-                buffer[..bytes_copy].copy_from_slice(&self.recv_queue[..bytes_copy]);
-                self.recv_queue.drain(..bytes_copy);
-
-                Ok(bytes_copy)
-            }
-
+            State::Established | State::CloseWait => Ok(self.recv_queue.read(buffer).await),
             State::LastAck | State::Closing | State::TimeWait => Ok(0),
             _ => unreachable!(),
         }
     }
 
-    pub fn on_packet(&mut self, tcp: &Tcp, payload: &[u8]) {
+    pub async fn on_packet(&mut self, tcp: &Tcp, payload: &[u8]) {
+        self.check_timers();
+
         let flags = tcp.flags();
         let mut acceptable = false;
 
@@ -360,6 +504,7 @@ impl<D: NetworkDevice> Socket<D> {
 
                     if acceptable {
                         self.send.una = tcp.ack_number();
+                        self.cleanup_rt_queue();
                     }
 
                     if wrapping_gt(self.send.una, self.send.iss) {
@@ -453,9 +598,9 @@ impl<D: NetworkDevice> Socket<D> {
                     self.send.nxt.wrapping_add(1),
                 ) {
                     self.send.una = tcp.ack_number();
+                    self.cleanup_rt_queue();
                     // TODO:
-                    //     Any segments on the retransmission queue that are thereby entirely
-                    //     acknowledged are removed. Users should receive positive acknowledgments
+                    //      Users should receive positive acknowledgments
                     //     for buffers that have been SENT and fully acknowledged (i.e., SEND buffer
                     //     should be returned with "ok" response).
 
@@ -479,7 +624,7 @@ impl<D: NetworkDevice> Socket<D> {
                 } else if let State::Closing = self.state {
                     if tcp.ack_number() == self.send.nxt {
                         self.state = State::TimeWait;
-                        self.do_timewait();
+                        self.do_timewait().await;
                     }
                 }
             }
@@ -509,7 +654,7 @@ impl<D: NetworkDevice> Socket<D> {
                 self.recv.nxt = seq_number.wrapping_add(payload.len() as u32);
                 self.recv.wnd = u16::MAX;
 
-                self.recv_queue.extend_from_slice(payload);
+                self.recv_queue.write(payload).await;
                 log::debug!("unread_data: {:?}", payload);
                 self.send_with_flags(self.send.nxt, TcpFlags::ACK);
             }
@@ -527,7 +672,7 @@ impl<D: NetworkDevice> Socket<D> {
                     // Enter [`State::TimeWait`] if our FIN is now acknowledged.
                     if tcp.ack_number() == self.send.nxt {
                         self.state = State::TimeWait;
-                        self.do_timewait();
+                        self.do_timewait().await;
                     } else {
                         self.state = State::Closing;
                     }
@@ -535,10 +680,10 @@ impl<D: NetworkDevice> Socket<D> {
 
                 State::FinWait2 => {
                     self.state = State::TimeWait;
-                    self.do_timewait();
+                    self.do_timewait().await;
                 }
 
-                State::TimeWait => todo!("restart the 2 MSL time-wait timeout"),
+                State::TimeWait => self.do_timewait().await,
 
                 State::CloseWait | State::Closing | State::LastAck => {}
                 state => unimplemented!("<FIN> {state:?}"),
@@ -551,7 +696,10 @@ impl<D: NetworkDevice> Socket<D> {
 
     #[inline]
     pub fn state(&self) -> State {
-        self.state
+        match self.timewait_task.as_ref() {
+            Some(task) if task.is_finished() => State::Closed,
+            _ => self.state,
+        }
     }
 }
 
@@ -577,25 +725,56 @@ pub const fn is_between_wrapped(start: u32, x: u32, end: u32) -> bool {
     wrapping_lt(start, x) && wrapping_lt(x, end)
 }
 
-pub struct RetransmitHandle {
-    pub seq_number: u32,
+pub trait TaskHandle {
+    /// Cancel the task associated with the handle.
+    fn cancel(&self);
 
-    /// The duration to wait before retransmitting the packet.
-    pub duration: Duration,
-}
-
-impl RetransmitHandle {
-    pub fn new(seq_number: u32, duration: Duration) -> Self {
-        Self {
-            seq_number,
-            duration,
-        }
-    }
+    /// Checks if the task associated with this [`TaskHandle`] has finished.
+    fn is_finished(&self) -> bool;
 }
 
 pub trait NetworkDevice: Send + Sync {
-    fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle);
+    type TaskHandle: TaskHandle;
 
-    /// Removes the retransmit handle from the retransmit queue.
-    fn remove_retransmit(&self, seq_number: u32);
+    /// Returns the IP address of the device.
+    fn ip_addr(&self) -> Ipv4Addr;
+    fn send(&self, payload: &[u8]);
+
+    /// Waits until `duration` has elapsed.
+    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send;
+
+    /// Spawns a new asynchronous task, returning a [`TaskHandle`] for it.
+    fn spawn_task<F>(task: F) -> Self::TaskHandle
+    where
+        F: Future<Output = ()> + Send + 'static;
 }
+
+// device.send_packet(...);
+// device.spawn_task(async move || {
+//    self.wait_for(Duration::from_millis(100)).await;
+//    // Re-send the packet.
+//    dveice.send_packet(...);
+// });
+//
+// device.do_time_wait();
+//
+// In this case state will need to be wrapped inside an Arc<Mutex>.
+//
+// pub async fn do_time_wait(&mut self) {
+//      assert_eq!(self.state, State::TimeWait);
+//      self.device.spawn_task(async move || {
+//          self.wait_for(2 * MSL).await;
+//          self.state = State::Closed;
+//      });
+// }
+//
+// Internally wait_for() will call device.wait_for().
+//
+// For Aero, the async Task will be basically a WaitQueue. The task will be woken up when the timer
+// has expired.
+//
+// For our testing on Linux, we will basically wrap the functions with the appropriate tokio
+// functions.
+//
+// Alternatively, we can also make all of this synchronous but that will introduce ugly callback
+// based code.

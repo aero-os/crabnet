@@ -1,12 +1,14 @@
+#![feature(async_fn_in_trait)]
+
 use netstack::data_link::EthType;
 use netstack::network::{Ipv4, Ipv4Addr, Ipv4Type};
 use netstack::transport::Tcp;
 use netstack::{IntoBoxedBytes, PacketParser, Protocol};
-use netstack_tcp::{Address, NetworkDevice, RetransmitHandle, Socket as TcpSocket};
-use std::collections::HashMap;
+use netstack_tcp::{Address, NetworkDevice, Socket as TcpSocket};
+use std::future::Future;
 use std::io;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::Duration;
 use tun_tap::{Iface, Mode};
 
 #[used]
@@ -22,69 +24,85 @@ static INIT_LOGGER: extern "C" fn() -> usize = {
     __init_logger
 };
 
-struct RetransmitEntry {
-    handle: RetransmitHandle,
-    now: Instant,
-}
-
 /// <https://www.kernel.org/doc/Documentation/networking/tuntap.txt>
 struct Tun {
     iface: Iface,
-    queue: Mutex<HashMap<u32, RetransmitEntry>>,
 }
 
 impl Tun {
     pub fn new(iface: Iface) -> Arc<Self> {
-        use std::thread;
+        Arc::new(Self { iface })
+    }
+}
 
-        let s1 = Arc::new(Self {
-            iface,
-            queue: Mutex::new(HashMap::new()),
-        });
+struct TaskHandle(tokio::task::JoinHandle<()>);
 
-        let s2 = s1.clone();
+impl netstack_tcp::TaskHandle for TaskHandle {
+    #[inline]
+    fn cancel(&self) {
+        self.0.abort();
+    }
 
-        thread::spawn(move || loop {
-            for (key, timer) in s2.queue.lock().unwrap().iter_mut() {
-                if Instant::now() - timer.now >= timer.handle.duration {
-                    // todo!()
-                }
-            }
-        });
-
-        s1
+    #[inline]
+    fn is_finished(&self) -> bool {
+        self.0.is_finished()
     }
 }
 
 impl NetworkDevice for Tun {
-    fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
+    type TaskHandle = TaskHandle;
+
+    fn ip_addr(&self) -> Ipv4Addr {
+        Ipv4Addr::new([192, 168, 0, 2])
+    }
+
+    // fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
+    //     use netstack::data_link::Tun;
+
+    //     self.queue.lock().unwrap().insert(
+    //         handle.seq_number,
+    //         RetransmitEntry {
+    //             handle,
+    //             now: Instant::now(),
+    //         },
+    //     );
+
+    //     // The IP is set in the run.sh script.
+    //     let ipv4 = ipv4.set_src_ip(Ipv4Addr::new([192, 168, 0, 2]));
+
+    //     let tun = Tun::new(0, EthType::Ip);
+    //     let packet = (tun / ipv4 / tcp / payload).into_boxed_bytes();
+
+    //     self.iface
+    //         .send(&packet)
+    //         .expect("tun: failed to send packet");
+    // }
+
+    async fn sleep(&self, duration: Duration) {
+        tokio::time::sleep(duration).await;
+    }
+
+    fn send(&self, payload: &[u8]) {
         use netstack::data_link::Tun;
 
-        self.queue.lock().unwrap().insert(
-            handle.seq_number,
-            RetransmitEntry {
-                handle,
-                now: Instant::now(),
-            },
-        );
-
-        // The IP is set in the run.sh script.
-        let ipv4 = ipv4.set_src_ip(Ipv4Addr::new([192, 168, 0, 2]));
-
         let tun = Tun::new(0, EthType::Ip);
-        let packet = (tun / ipv4 / tcp / payload).into_boxed_bytes();
+        let packet = (tun / payload).into_boxed_bytes();
 
         self.iface
             .send(&packet)
             .expect("tun: failed to send packet");
     }
 
-    fn remove_retransmit(&self, seq_number: u32) {
-        self.queue.lock().unwrap().remove(&seq_number);
+    fn spawn_task<F>(task: F) -> Self::TaskHandle
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        TaskHandle(tokio::spawn(task))
     }
 }
 
-pub fn main() -> io::Result<()> {
+#[tokio::main]
+pub async fn main() -> io::Result<()> {
     let iface = Iface::new("tun0", Mode::Tun)?;
     let device = Tun::new(iface);
 
@@ -108,7 +126,7 @@ pub fn main() -> io::Result<()> {
         let payload = &packet_parser.payload()[options_size..];
 
         if let Some(tcp_socket) = tcp_socket.as_mut() {
-            tcp_socket.on_packet(tcp, payload);
+            tcp_socket.on_packet(tcp, payload).await;
 
             if tcp_socket.state() == netstack_tcp::State::Established && !done {
                 tcp_socket.send(b"okay!").unwrap();
@@ -140,15 +158,10 @@ mod test {
     use std::io::{Read, Write};
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     use super::*;
-
-    struct RetransmitEntry {
-        handle: RetransmitHandle,
-        now: Instant,
-        raw: Vec<u8>,
-    }
 
     struct TestGuard {
         path: PathBuf,
@@ -208,8 +221,6 @@ mod test {
         this: Arc<Mutex<Vec<Packet>>>,
         /// Receive of the peer device.
         peer: Arc<Mutex<Vec<Packet>>>,
-        /// The TCP re-transmit queue.
-        queue: Mutex<HashMap<u32, RetransmitEntry>>,
         /// Name of the device; useful for debugging.
         name: &'static str,
         pcap: Arc<Mutex<Option<PcapWriter<Vec<u8>>>>>,
@@ -232,17 +243,32 @@ mod test {
     }
 
     impl NetworkDevice for FakeDevice {
-        fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
+        type TaskHandle = TaskHandle;
+
+        async fn sleep(&self, _duration: Duration) {
+            loop {
+                tokio::task::yield_now().await;
+            }
+        }
+
+        fn spawn_task<F>(task: F) -> Self::TaskHandle
+        where
+            F: std::future::Future<Output = ()> + Send + 'static,
+        {
+            TaskHandle(tokio::task::spawn(task))
+        }
+
+        fn ip_addr(&self) -> Ipv4Addr {
+            match self.name {
+                "server" => Ipv4Addr::new([192, 168, 0, 2]),
+                "client" => Ipv4Addr::new([192, 168, 0, 1]),
+                _ => unimplemented!(),
+            }
+        }
+
+        fn send(&self, payload: &[u8]) {
             let eth = data_link::Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);
-            let packet = (eth / ipv4 / tcp / payload).into_boxed_bytes();
-
-            let seq_number = handle.seq_number;
-            let rt_entry = RetransmitEntry {
-                handle,
-                now: Instant::now(),
-                raw: packet.clone().into_vec(),
-            };
-
+            let packet = (eth / payload).into_boxed_bytes();
             self.pcap
                 .lock()
                 .unwrap()
@@ -254,39 +280,8 @@ mod test {
                     &packet,
                 ))
                 .unwrap();
-
-            self.queue.lock().unwrap().insert(seq_number, rt_entry);
             self.peer.lock().unwrap().push(Packet(packet));
         }
-
-        fn remove_retransmit(&self, seq_number: u32) {
-            self.queue.lock().unwrap().remove(&seq_number);
-        }
-    }
-
-    /// Spawns a timer thread for the given device.
-    fn spwan_timer(device: Arc<FakeDevice>) {
-        use std::thread;
-
-        thread::spawn(move || loop {
-            let now = Instant::now();
-
-            let mut queue = device.queue.lock().unwrap();
-            let mut peer = device.peer.lock().unwrap();
-
-            for timer in queue.values_mut() {
-                if now - timer.now >= timer.handle.duration {
-                    peer.push(Packet(timer.raw.clone().into_boxed_slice()));
-                    timer.handle.duration *= 2;
-                }
-            }
-
-            drop(peer);
-            drop(queue);
-
-            // Check the timers every 100ms.
-            thread::sleep(Duration::from_millis(100));
-        });
     }
 
     fn socket_pair<S: AsRef<str>>(name: S) -> (SocketShim, SocketShim, TestGuard) {
@@ -300,7 +295,6 @@ mod test {
         let n1 = Arc::new(FakeDevice {
             this: p1.clone(),
             peer: p2.clone(),
-            queue: Mutex::new(HashMap::new()),
             name: "server",
             pcap: pcap.clone(),
         });
@@ -308,7 +302,6 @@ mod test {
         let n2 = Arc::new(FakeDevice {
             this: p2.clone(),
             peer: p1.clone(),
-            queue: Mutex::new(HashMap::new()),
             name: "client",
             pcap: pcap.clone(),
         });
@@ -340,7 +333,7 @@ mod test {
         //     }
         // }
 
-        fn await_process(&mut self) {
+        async fn await_process(&mut self) {
             let mut buf = [0u8; 1504];
             let device = &self.0.device;
 
@@ -357,7 +350,7 @@ mod test {
                 let options_size = tcp.header_size() as usize - tcp.write_len();
                 let payload = &packet_parser.payload()[options_size..];
 
-                self.0.on_packet(tcp, payload);
+                self.0.on_packet(tcp, payload).await;
                 break;
             }
         }
@@ -377,21 +370,21 @@ mod test {
         }
     }
 
-    #[test]
-    fn normal_connection() {
+    #[tokio::test]
+    async fn normal_connection() {
         let (mut server, mut client, _guard) = socket_pair("normal_connection");
 
         // Normal 3-way handshake.
         assert_eq!(server.state(), State::Listen);
         assert_eq!(client.state(), State::SynSent);
 
-        server.await_process();
+        server.await_process().await;
         assert_eq!(server.state(), State::SynRecv);
 
-        client.await_process();
+        client.await_process().await;
         assert_eq!(client.state(), State::Established);
 
-        server.await_process();
+        server.await_process().await;
         assert_eq!(server.state(), State::Established);
 
         // Close the connection.
@@ -401,42 +394,43 @@ mod test {
         assert_eq!(client.state(), State::FinWait1);
 
         // Server: ACK the FIN.
-        server.await_process();
+        server.await_process().await;
         assert_eq!(server.state(), State::CloseWait);
 
         // Client: Server ACKed the FIN; enter [`State::FinWait2`].
-        client.await_process();
+        client.await_process().await;
         assert_eq!(client.state(), State::FinWait2);
 
         // Server: Send FIN.
         server.close();
         assert_eq!(server.state(), State::LastAck);
 
-        // Internally, we also enter the [`State::TimeWait`] state.
-        client.await_process();
+        client.await_process().await;
+        assert_eq!(client.state(), State::TimeWait);
+        client.cancel_timewait();
         assert_eq!(client.state(), State::Closed);
 
         // Server: Recieved ACK for the FIN.
-        server.await_process();
+        server.await_process().await;
         assert_eq!(server.state(), State::Closed);
     }
 
     // RFC 9293 S3.6 F13 (Simultaneous Close Sequence)
-    #[test]
-    fn simultaneous_close() {
+    #[tokio::test]
+    async fn simultaneous_close() {
         let (mut server, mut client, _guard) = socket_pair("simultaneous_close");
 
         // Normal 3-way handshake.
         assert_eq!(server.state(), State::Listen);
         assert_eq!(client.state(), State::SynSent);
 
-        server.await_process();
+        server.await_process().await;
         assert_eq!(server.state(), State::SynRecv);
 
-        client.await_process();
+        client.await_process().await;
         assert_eq!(client.state(), State::Established);
 
-        server.await_process();
+        server.await_process().await;
         assert_eq!(server.state(), State::Established);
 
         // Close the connection.
@@ -450,38 +444,42 @@ mod test {
         assert_eq!(server.state(), State::FinWait1);
 
         // ACK the FIN.
-        server.await_process();
+        server.await_process().await;
         assert_eq!(server.state(), State::Closing);
 
         // ACK the FIN.
-        client.await_process();
+        client.await_process().await;
         assert_eq!(client.state(), State::Closing);
 
-        server.await_process();
+        server.await_process().await;
+        assert_eq!(server.state(), State::TimeWait);
+        server.cancel_timewait();
         assert_eq!(server.state(), State::Closed);
 
-        client.await_process();
+        client.await_process().await;
+        assert_eq!(client.state(), State::TimeWait);
+        client.cancel_timewait();
         assert_eq!(client.state(), State::Closed);
     }
 
-    #[test]
-    fn send_bytes() {
+    #[tokio::test]
+    async fn send_bytes() {
         let (mut server, mut client, _guard) = socket_pair("send_bytes");
-        server.await_process();
-        client.await_process();
-        server.await_process();
+        server.await_process().await;
+        client.await_process().await;
+        server.await_process().await;
 
         // Send some yummy bytes.
         client.send(b"Hello, world!").expect("failed to send bytes");
-        server.await_process();
+        server.await_process().await;
 
         let mut buf = [0u8; 512];
-        let bytes_read = server.recv(&mut buf).expect("failed to recv bytes");
+        let bytes_read = server.recv(&mut buf).await.expect("failed to recv bytes");
         assert_eq!(bytes_read, 13);
         assert_eq!(&buf[..bytes_read], b"Hello, world!");
 
         client.close();
-        server.await_process();
+        server.await_process().await;
     }
 
     // #[test]
@@ -515,4 +513,7 @@ mod test {
     //     server.await_process();
     //     assert_eq!(server.state(), State::CloseWait);
     // }
+
+    // Send (packet)
+    // device.register_waker(self.timer_waker.clone(), Duration::from_secs(1));
 }

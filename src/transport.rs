@@ -68,6 +68,7 @@ bitflags::bitflags! {
     }
 }
 
+#[derive(Debug, Clone)]
 #[repr(C, packed)]
 pub struct Tcp {
     pub src_port: BigEndian<u16>,

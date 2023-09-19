@@ -8,6 +8,13 @@ env_logger = "0.10.0"
 log = "0.4.20"
 netstack = { path = "../" }
 tun-tap = { version = "0.1.4", default-features = false }
+tokio = { version = "1.32.0", features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "time",
+] }
+futures-util = "0.3.28"
 
 [dev-dependencies]
 pcap-file = "2.0.0"

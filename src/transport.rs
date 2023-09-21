@@ -68,6 +68,7 @@ bitflags::bitflags! {
     }
 }
 
+#[derive(Debug)]
 #[repr(C, packed)]
 pub struct Tcp {
     pub src_port: BigEndian<u16>,
@@ -164,22 +165,10 @@ impl Tcp {
         let header_size = self.flags.to_native().get_bits(12..=15);
         header_size as u8 * core::mem::size_of::<u32>() as u8
     }
-}
 
-impl<T: Protocol, U: Protocol> Stacked<Stacked<Stacked<T, Ipv4>, Tcp>, U> {
-    pub fn ack_len(&self) -> u32 {
-        let tcp = &self.upper.lower;
-        let ipv4 = &self.upper.upper.lower;
-
-        let data_len = ipv4.payload_len() as u32;
-        let flags = tcp.flags();
-
-        let mut addend = 0;
-        if flags.contains(TcpFlags::FIN) | flags.contains(TcpFlags::SYN) {
-            addend = 1;
-        }
-
-        data_len + addend
+    #[inline]
+    pub fn options_size(&self) -> u8 {
+        self.header_size() - core::mem::size_of::<Tcp>() as u8
     }
 }
 

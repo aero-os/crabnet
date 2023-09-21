@@ -1,4 +1,5 @@
 use byte_endian::BigEndian;
+use static_assertions::const_assert_eq;
 
 use crate::{IsSafeToWrite, Protocol, Stack, Stacked, StackingAnchor};
 
@@ -16,6 +17,12 @@ impl Ipv4Addr {
 
     pub fn new(addr: [u8; Self::ADDR_SIZE]) -> Self {
         Self(addr)
+    }
+}
+
+impl From<[u8; Ipv4Addr::ADDR_SIZE]> for Ipv4Addr {
+    fn from(value: [u8; Ipv4Addr::ADDR_SIZE]) -> Self {
+        Self(value)
     }
 }
 
@@ -40,6 +47,8 @@ pub struct Ipv4 {
     src_ip: Ipv4Addr,
     dest_ip: Ipv4Addr,
 }
+
+const_assert_eq!(core::mem::size_of::<Ipv4>(), 20);
 
 impl Ipv4 {
     crate::impl_stack!(@getter src_ip: Ipv4Addr as Ipv4Addr, dest_ip: Ipv4Addr as Ipv4Addr, protocol: Ipv4Type as Ipv4Type);

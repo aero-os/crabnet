@@ -1,5 +1,11 @@
-use std::sync::Arc;
-use std::time::Duration;
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
+use core::time::Duration;
 
 use netstack::network::{Ipv4, Ipv4Addr, Ipv4Type};
 use netstack::transport::{Tcp, TcpFlags};
@@ -117,14 +123,17 @@ pub enum Error {
     NotConnected,
     /// No buffer space available.
     NoBufs,
+    /// The operation needs to block to complete and the blocking operation was requested to not
+    /// occur.
+    WouldBlock,
 }
 
 pub struct Socket<D: NetworkDevice> {
     state: State,
     recv: RecvSequenceSpace,
     send: SendSequenceSpace,
-    recv_queue: Vec<u8>,
-    addr: Address,
+    pub addr: Address,
+    pub recv_queue: Vec<u8>,
     pub device: Arc<D>,
 }
 
@@ -152,6 +161,7 @@ impl<D: NetworkDevice> Socket<D> {
 
         // TODO: Actually set to something what we can handle.
         socket.recv.wnd = u16::MAX;
+        log::debug!("sending syn");
         socket.send_syn();
         socket
     }
@@ -248,15 +258,18 @@ impl<D: NetworkDevice> Socket<D> {
         }
     }
 
-    pub fn recv(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
+    pub fn recv(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         match self.state {
             State::Closed => Err(Error::NotConnected),
             State::Listen | State::SynSent | State::SynRecv => Err(Error::NoBufs),
-
             State::Established | State::CloseWait => {
-                let bytes_copy = buffer.len().min(self.recv_queue.len());
+                if self.recv_queue.is_empty() {
+                    return Err(Error::WouldBlock);
+                }
 
-                buffer[..bytes_copy].copy_from_slice(&self.recv_queue[..bytes_copy]);
+                let bytes_copy = buf.len().min(self.recv_queue.len());
+
+                buf[..bytes_copy].copy_from_slice(&self.recv_queue[..bytes_copy]);
                 self.recv_queue.drain(..bytes_copy);
 
                 Ok(bytes_copy)
@@ -510,7 +523,6 @@ impl<D: NetworkDevice> Socket<D> {
                 self.recv.wnd = u16::MAX;
 
                 self.recv_queue.extend_from_slice(payload);
-                log::debug!("unread_data: {:?}", payload);
                 self.send_with_flags(self.send.nxt, TcpFlags::ACK);
             }
 

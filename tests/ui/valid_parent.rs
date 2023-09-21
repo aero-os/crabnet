@@ -1,5 +1,5 @@
-use netstack::data_link::{Eth, EthType, MacAddr};
-use netstack::transport::Udp;
+use crabnet::data_link::{Eth, EthType, MacAddr};
+use crabnet::transport::Udp;
 
 fn main() {
     let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);

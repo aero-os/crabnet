@@ -13,12 +13,12 @@ error[E0599]: the method `into_boxed_bytes` exists for struct `Stacked<Udp, [u8;
   | doesn't satisfy `_: IsSafeToWrite`
   |
   = note: the following trait bounds were not satisfied:
-          `Stacked<netstack::transport::Udp, [u8; 4]>: IsSafeToWrite`
-          which is required by `Stacked<netstack::transport::Udp, [u8; 4]>: IntoBoxedBytes`
-          `&Stacked<netstack::transport::Udp, [u8; 4]>: IsSafeToWrite`
-          which is required by `&Stacked<netstack::transport::Udp, [u8; 4]>: IntoBoxedBytes`
-          `&mut Stacked<netstack::transport::Udp, [u8; 4]>: IsSafeToWrite`
-          which is required by `&mut Stacked<netstack::transport::Udp, [u8; 4]>: IntoBoxedBytes`
+          `Stacked<crabnet::transport::Udp, [u8; 4]>: IsSafeToWrite`
+          which is required by `Stacked<crabnet::transport::Udp, [u8; 4]>: IntoBoxedBytes`
+          `&Stacked<crabnet::transport::Udp, [u8; 4]>: IsSafeToWrite`
+          which is required by `&Stacked<crabnet::transport::Udp, [u8; 4]>: IntoBoxedBytes`
+          `&mut Stacked<crabnet::transport::Udp, [u8; 4]>: IsSafeToWrite`
+          which is required by `&mut Stacked<crabnet::transport::Udp, [u8; 4]>: IntoBoxedBytes`
 
 error[E0599]: the method `into_boxed_bytes` exists for struct `Udp`, but its trait bounds were not satisfied
  --> tests/ui/udp_no_parent.rs:9:15
@@ -31,21 +31,21 @@ error[E0599]: the method `into_boxed_bytes` exists for struct `Udp`, but its tra
   | pub struct Udp {
   | --------------
   | |
-  | doesn't satisfy `netstack::transport::Udp: IntoBoxedBytes`
-  | doesn't satisfy `netstack::transport::Udp: IsSafeToWrite`
+  | doesn't satisfy `crabnet::transport::Udp: IntoBoxedBytes`
+  | doesn't satisfy `crabnet::transport::Udp: IsSafeToWrite`
   |
   = note: the following trait bounds were not satisfied:
-          `netstack::transport::Udp: IsSafeToWrite`
-          which is required by `netstack::transport::Udp: IntoBoxedBytes`
-          `&netstack::transport::Udp: IsSafeToWrite`
-          which is required by `&netstack::transport::Udp: IntoBoxedBytes`
-          `&mut netstack::transport::Udp: IsSafeToWrite`
-          which is required by `&mut netstack::transport::Udp: IntoBoxedBytes`
+          `crabnet::transport::Udp: IsSafeToWrite`
+          which is required by `crabnet::transport::Udp: IntoBoxedBytes`
+          `&crabnet::transport::Udp: IsSafeToWrite`
+          which is required by `&crabnet::transport::Udp: IntoBoxedBytes`
+          `&mut crabnet::transport::Udp: IsSafeToWrite`
+          which is required by `&mut crabnet::transport::Udp: IntoBoxedBytes`
 
-warning: unused import: `netstack::IntoBoxedBytes`
+warning: unused import: `crabnet::IntoBoxedBytes`
  --> tests/ui/udp_no_parent.rs:2:5
   |
-2 | use netstack::IntoBoxedBytes;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+2 | use crabnet::IntoBoxedBytes;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
   |
   = note: `#[warn(unused_imports)]` on by default

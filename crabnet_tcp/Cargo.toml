@@ -1,5 +1,5 @@
 [package]
-name = "netstack_tcp"
+name = "crabnet_tcp"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,7 +12,7 @@ env_logger = { version = "0.10.0", optional = true }
 tun-tap = { version = "0.1.4", default-features = false, optional = true }
 
 log = "0.4.20"
-netstack = { path = "../" }
+crabnet = { path = "../" }
 
 [dev-dependencies]
 pcap-file = "2.0.0"

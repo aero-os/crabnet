@@ -17,11 +17,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Build `netstack`
+    - name: Build `crabnet`
       run: cargo build --verbose
-    - name: Run tests for `netstack`
+    - name: Run tests for `crabnet`
       run: cargo test --verbose
-    - name: Build `netstack_tcp`
-      run: cargo build --verbose --manifest-path netstack_tcp/Cargo.toml
-    - name: Run tests for `netstack_tcp`
-      run: cargo test --verbose --manifest-path netstack_tcp/Cargo.toml
+    - name: Build `crabnet_tcp`
+      run: cargo build --verbose --manifest-path crabnet_tcp/Cargo.toml
+    - name: Run tests for `crabnet_tcp`
+      run: cargo test --verbose --manifest-path crabnet_tcp/Cargo.toml

@@ -1,5 +1,5 @@
 [package]
-name = "netstack"
+name = "crabnet"
 version = "0.1.0"
 edition = "2021"
 authors = [
@@ -17,4 +17,4 @@ static_assertions = "1.1.0"
 trybuild = "1.0"
 
 [workspace]
-members = ["netstack_tcp"]
+members = ["crabnet_tcp"]

@@ -7,8 +7,8 @@ use alloc::vec::Vec;
 
 use core::time::Duration;
 
-use netstack::network::{Ipv4, Ipv4Addr, Ipv4Type};
-use netstack::transport::{Tcp, TcpFlags};
+use crabnet::network::{Ipv4, Ipv4Addr, Ipv4Type};
+use crabnet::transport::{Tcp, TcpFlags};
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]
 pub enum State {

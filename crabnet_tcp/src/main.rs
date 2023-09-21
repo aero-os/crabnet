@@ -1,8 +1,8 @@
-use netstack::data_link::EthType;
-use netstack::network::{Ipv4, Ipv4Addr, Ipv4Type};
-use netstack::transport::Tcp;
-use netstack::{IntoBoxedBytes, PacketParser, Protocol};
-use netstack_tcp::{Address, NetworkDevice, RetransmitHandle, Socket as TcpSocket};
+use crabnet::data_link::EthType;
+use crabnet::network::{Ipv4, Ipv4Addr, Ipv4Type};
+use crabnet::transport::Tcp;
+use crabnet::{IntoBoxedBytes, PacketParser, Protocol};
+use crabnet_tcp::{Address, NetworkDevice, RetransmitHandle, Socket as TcpSocket};
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -58,7 +58,7 @@ impl Tun {
 
 impl NetworkDevice for Tun {
     fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
-        use netstack::data_link::Tun;
+        use crabnet::data_link::Tun;
 
         self.queue.lock().unwrap().insert(
             handle.seq_number,
@@ -110,7 +110,7 @@ pub fn main() -> io::Result<()> {
         if let Some(tcp_socket) = tcp_socket.as_mut() {
             tcp_socket.on_packet(tcp, payload);
 
-            if tcp_socket.state() == netstack_tcp::State::Established && !done {
+            if tcp_socket.state() == crabnet_tcp::State::Established && !done {
                 tcp_socket.send(b"okay!").unwrap();
                 // tcp_socket.close();
                 done = true;
@@ -132,8 +132,8 @@ mod test {
     // log::debug!("xx: {:?}", server.device.this.lock().unwrap());
     // TODO: ensure empty after await
 
-    use netstack::data_link::{self, MacAddr};
-    use netstack_tcp::State;
+    use crabnet::data_link::{self, MacAddr};
+    use crabnet_tcp::State;
     use pcap_file::pcap::{PcapPacket, PcapWriter};
 
     use std::fs::OpenOptions;

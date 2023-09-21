@@ -1,7 +1,7 @@
-use netstack::data_link::{Eth, EthType, MacAddr};
-use netstack::network::{Ipv4, Ipv4Addr, Ipv4Type};
-use netstack::transport::Udp;
-use netstack::IntoBoxedBytes;
+use crabnet::data_link::{Eth, EthType, MacAddr};
+use crabnet::network::{Ipv4, Ipv4Addr, Ipv4Type};
+use crabnet::transport::Udp;
+use crabnet::IntoBoxedBytes;
 
 pub fn main() {
     let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);

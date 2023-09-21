@@ -1,5 +1,5 @@
-use netstack::transport::Udp;
-use netstack::IntoBoxedBytes;
+use crabnet::transport::Udp;
+use crabnet::IntoBoxedBytes;
 
 fn main() {
     let x = Udp::new(8080, 80) / [69u8; 4];

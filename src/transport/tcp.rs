@@ -3,57 +3,7 @@ use byte_endian::BigEndian;
 use static_assertions::const_assert_eq;
 
 use crate::network::Ipv4;
-use crate::{PointerExtension, Protocol, Stack, Stacked, StackingAnchor};
-
-#[repr(C, packed)]
-pub struct Udp {
-    src_port: BigEndian<u16>,
-    dst_port: BigEndian<u16>,
-    len: BigEndian<u16>,
-    crc: BigEndian<u16>,
-}
-
-impl Udp {
-    crate::impl_stack!(@getter src_port: BigEndian<u16> as u16, dst_port: BigEndian<u16> as u16);
-
-    pub fn new(src_port: u16, dst_port: u16) -> Self {
-        Self {
-            src_port: src_port.into(),
-            dst_port: dst_port.into(),
-            len: 0.into(),
-            crc: 0.into(),
-        }
-    }
-}
-
-const_assert_eq!(core::mem::size_of::<Udp>(), 8);
-
-unsafe impl StackingAnchor<Udp> for Udp {}
-unsafe impl<U: Protocol> StackingAnchor<Udp> for Stacked<U, Udp> {}
-
-impl<U: StackingAnchor<Ipv4>> Stack<U> for Udp {
-    type Output = Stacked<U, Self>;
-
-    fn stack(self, lhs: U) -> Self::Output {
-        Self::Output {
-            upper: lhs,
-            lower: self,
-        }
-    }
-}
-
-crate::impl_stack!(@make Udp {
-    fn write_stage2(&self, mem: NonNull<u8>, payload_len: usize) {
-        use crate::checksum::{self, PseudoHeader};
-
-        let udp = unsafe { mem.cast::<Udp>().as_mut() };
-        let ipv4 = unsafe { mem.cast::<Ipv4>().sub(1).as_ref() };
-        let pseudo_header = PseudoHeader::new(ipv4);
-
-        udp.len = (payload_len as u16).into();
-        udp.crc = checksum::make_combine(&[checksum::calculate(&pseudo_header), checksum::calculate_with_len(udp, payload_len)]);
-    }
-});
+use crate::{Parsable, Parsed, PointerExtension, Protocol, Stack, Stacked, StackingAnchor};
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,7 +123,7 @@ impl Tcp {
 }
 
 unsafe impl StackingAnchor<Tcp> for Tcp {}
-unsafe impl<U: Protocol> StackingAnchor<Udp> for Stacked<U, Tcp> {}
+unsafe impl<U: Protocol> StackingAnchor<Tcp> for Stacked<U, Tcp> {}
 
 impl<U: StackingAnchor<Ipv4>> Stack<U> for Tcp {
     type Output = Stacked<U, Self>;
@@ -197,3 +147,83 @@ crate::impl_stack!(@make Tcp {
         tcp.checksum = checksum::make_combine(&[checksum::calculate(&pseudo_header), checksum::calculate_with_len(tcp, payload_len)]);
     }
 });
+
+#[derive(Debug)]
+pub struct TcpOptions<'a>(&'a [u8]);
+
+impl<'a> TcpOptions<'a> {
+    /// Returns the TCP options as a byte slice.
+    #[inline]
+    pub fn as_slice(&self) -> &'a [u8] {
+        self.0
+    }
+}
+
+unsafe impl<'a> Parsable<'a> for TcpOptions<'a> {
+    type Output = TcpOptions<'a>;
+
+    fn parse<'b>(mem: *const u8, size: usize) -> crate::Parsed<TcpOptions<'a>> {
+        let header_size = core::mem::size_of::<Tcp>();
+
+        // SAFETY: We only implement Stack<Tcp, TcpOptions> for [`TcpOptions`] and we do not
+        // implement [`IsSafeToWrite`], so we know that the the parent layer is TCP thus, the
+        // pointer dereference is valid.
+        let tcp = unsafe { &*(mem.sub(header_size) as *const Tcp) };
+        let options_size = tcp.options_size() as usize;
+
+        // TODO: Invalid header, return an error.
+        assert!(options_size <= size);
+
+        let options = unsafe { core::slice::from_raw_parts(mem, options_size) };
+
+        Parsed {
+            value: TcpOptions(options),
+            size: options_size,
+        }
+    }
+}
+
+unsafe impl<'a> StackingAnchor<TcpOptions<'a>> for TcpOptions<'a> {}
+unsafe impl<'a, U: Protocol> StackingAnchor<TcpOptions<'a>> for Stacked<U, TcpOptions<'a>> {}
+
+impl<'a, U: StackingAnchor<Tcp>> Stack<U> for TcpOptions<'a> {
+    type Output = Stacked<U, Self>;
+
+    #[inline]
+    fn stack(self, lhs: U) -> Self::Output {
+        Self::Output {
+            upper: lhs,
+            lower: self,
+        }
+    }
+}
+
+impl<'a, L: Stack<TcpOptions<'a>>> core::ops::Div<L> for TcpOptions<'a> {
+    type Output = L::Output;
+
+    #[inline]
+    fn div(self, rhs: L) -> Self::Output {
+        rhs.stack(self)
+    }
+}
+
+unsafe impl<'a> Protocol for TcpOptions<'a> {
+    #[inline]
+    fn write_len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    unsafe fn write_stage1(&self, mem: core::ptr::NonNull<u8>) {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self.0.as_ptr(),
+                mem.as_ptr().cast::<u8>(),
+                self.0.len(),
+            );
+        }
+    }
+
+    #[inline]
+    unsafe fn write_stage2(&self, _mem: core::ptr::NonNull<u8>, _payload_len: usize) {}
+}

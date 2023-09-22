@@ -13,7 +13,7 @@ while getopts "t" flag; do
     esac
 done
 
-EXE=../target/release/netstack_tcp
+EXE=../target/release/crabnet_tcp
 set -xe
 
 if [ "$istest" = true ]; then
@@ -21,7 +21,7 @@ if [ "$istest" = true ]; then
         jq -r 'select(.reason == "compiler-artifact") | select(.target.kind.[0] == "bin") | .executable')
 fi
 
-cargo build --release --bin netstack_tcp
+cargo build --release --bin crabnet_tcp
 
 # CAP_NET_ADMIN: Allows to perform various network-related operations.
 sudo setcap CAP_NET_ADMIN=eip $EXE

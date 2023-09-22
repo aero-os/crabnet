@@ -1,7 +1,7 @@
 use byte_endian::BigEndian;
 use static_assertions::const_assert_eq;
 
-use crate::{IsSafeToWrite, Protocol, Stack, Stacked, StackingAnchor};
+use crate::{IsSafeToWrite, Parsable, Protocol, Stack, Stacked, StackingAnchor};
 
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
 #[repr(C)]

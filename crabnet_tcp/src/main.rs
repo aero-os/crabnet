@@ -1,6 +1,6 @@
 use crabnet::data_link::EthType;
 use crabnet::network::{Ipv4, Ipv4Addr, Ipv4Type};
-use crabnet::transport::Tcp;
+use crabnet::transport::{Tcp, TcpOptions};
 use crabnet::{IntoBoxedBytes, PacketParser, Protocol};
 use crabnet_tcp::{Address, NetworkDevice, RetransmitHandle, Socket as TcpSocket};
 use std::collections::HashMap;
@@ -104,8 +104,10 @@ pub fn main() -> io::Result<()> {
         }
 
         let tcp = packet_parser.next::<Tcp>();
-        let options_size = tcp.header_size() as usize - tcp.write_len();
-        let payload = &packet_parser.payload()[options_size..];
+        let options = packet_parser.next::<TcpOptions>();
+        log::debug!("[ TCP ] Options: {options:?}");
+
+        let payload = packet_parser.payload();
 
         if let Some(tcp_socket) = tcp_socket.as_mut() {
             tcp_socket.on_packet(tcp, payload);

@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(allocator_api, trivial_bounds, new_uninit)]
+#![feature(allocator_api, trivial_bounds, new_uninit, associated_type_defaults)]
 
 extern crate alloc;
 
@@ -52,6 +52,22 @@ macro_rules! impl_stack {
             }
 
             unsafe fn write_stage2(&self, $mem: core::ptr::NonNull<u8>, $payload_len: usize) $code
+        }
+
+        unsafe impl<'a> Parsable<'a> for $name {
+            type Output = &'a Self;
+
+            fn parse(mem: *const u8, size: usize) -> crate::Parsed<Self::Output> {
+                let protocol_size = core::mem::size_of::<Self>();
+                assert!(size >= protocol_size);
+
+                let header = unsafe { &*(mem.cast::<Self>()) };
+
+                crate::Parsed {
+                    value: header,
+                    size: protocol_size
+                }
+            }
         }
     };
 
@@ -223,6 +239,22 @@ impl<T: IsSafeToWrite + Sized> IntoBoxedBytes for T {
     }
 }
 
+pub struct Parsed<T> {
+    /// The parsed protocol header.
+    value: T,
+    /// The size of the parsed protocol header.
+    size: usize,
+}
+
+pub unsafe trait Parsable<'a> {
+    type Output;
+
+    fn parse(mem: *const u8, size: usize) -> Parsed<Self::Output>
+    where
+        Self::Output: 'a;
+}
+
+// TODO(andypython): The packet parser API can be further improved.
 pub struct PacketParser<'a> {
     payload: &'a [u8],
     cursor: usize,
@@ -236,10 +268,14 @@ impl<'a> PacketParser<'a> {
         }
     }
 
-    pub fn next<U: Protocol + StackingAnchor<U>>(&mut self) -> &'a U {
-        let ptr = unsafe { &*self.payload.as_ptr().add(self.cursor).cast::<U>() };
-        self.cursor += core::mem::size_of::<U>();
-        ptr
+    pub fn next<U>(&mut self) -> <U as Parsable<'a>>::Output
+    where
+        U: Protocol + StackingAnchor<U> + Parsable<'a> + 'a,
+    {
+        let mem = &self.payload[self.cursor..];
+        let parsed = U::parse(mem.as_ptr(), mem.len());
+        self.cursor += parsed.size;
+        parsed.value
     }
 
     pub fn payload(&self) -> &'a [u8] {
@@ -248,11 +284,13 @@ impl<'a> PacketParser<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
+    use crate::transport::TcpOptions;
+
     use super::data_link::{Eth, EthType, MacAddr};
     use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
     use super::transport::{Tcp, Udp};
-    use super::IntoBoxedBytes;
+    use super::{IntoBoxedBytes, PacketParser};
 
     #[test]
     fn ui() {
@@ -311,8 +349,6 @@ mod tests {
 
     #[test]
     fn packet_parse() {
-        use crate::PacketParser;
-
         const RAW_PACKET: &[u8] = &[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 69, 0, 0, 32, 0, 0, 0, 0, 64, 17, 122, 206,
             255, 255, 255, 255, 255, 255, 255, 255, 31, 144, 0, 80, 0, 12, 85, 108, 69, 69, 69, 69,
@@ -332,5 +368,24 @@ mod tests {
         let udp = packet_parser.next::<Udp>();
         assert_eq!(udp.src_port(), 8080);
         assert_eq!(udp.dst_port(), 80);
+    }
+
+    #[test]
+    fn tcp_options_parse() {
+        const RAW_PACKET: &[u8] = &[
+            69, 0, 0, 60, 118, 48, 64, 0, 64, 6, 67, 56, 192, 168, 0, 1, 192, 168, 0, 2, 168, 138,
+            1, 187, 89, 35, 252, 120, 0, 0, 0, 0, 160, 2, 250, 240, 254, 76, 0, 0, 2, 4, 5, 180, 4,
+            2, 8, 10, 151, 174, 53, 222, 0, 0, 0, 0, 1, 3, 3, 7,
+        ];
+
+        let mut packet_parser = PacketParser::new(&RAW_PACKET);
+        let _ip = packet_parser.next::<Ipv4>();
+        let _tcp = packet_parser.next::<Tcp>();
+        let options = packet_parser.next::<TcpOptions>();
+
+        assert_eq!(
+            options.as_slice(),
+            &[2, 4, 5, 180, 4, 2, 8, 10, 151, 174, 53, 222, 0, 0, 0, 0, 1, 3, 3, 7]
+        );
     }
 }

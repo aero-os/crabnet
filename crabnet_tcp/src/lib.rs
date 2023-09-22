@@ -399,6 +399,7 @@ impl<D: NetworkDevice> Socket<D> {
             _ => {}
         }
 
+        // Otherwise, first check the sequence number.
         let wend = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
         let seq_number = tcp.sequence_number();
 
@@ -442,17 +443,70 @@ impl<D: NetworkDevice> Socket<D> {
             return;
         }
 
-        assert!(flags.contains(TcpFlags::ACK));
-
-        match self.state {
-            State::SynRecv => {
-                if !flags.contains(TcpFlags::ACK) {
-                    // Expected an ACK for the sent SYN.
+        // Second, check the RST bit.
+        if flags.contains(TcpFlags::RST) {
+            match self.state {
+                State::SynRecv => {
+                    // TODO(andypython):
+                    //      If this connection was initiated with a passive OPEN (i.e., came from
+                    //      the LISTEN state), then return this connection to LISTEN state and
+                    //      return. The user need not be informed. If this connection was initiated
+                    //      with an active OPEN (i.e., came from SYN-SENT state), then the
+                    //      connection was refused; signal the user "connection refused". In either
+                    //      case, the retransmission queue should be flushed. And in the active OPEN
+                    //      case, enter the CLOSED state and delete the TCB, and return.
+                    self.state = State::Closed;
                     return;
                 }
 
-                // ACKed the SYN (i.e, at least one acked byte and we have only sent the SYN).
-                self.state = State::Established;
+                State::Established | State::FinWait1 | State::FinWait2 | State::CloseWait => {
+                    // TODO(andypython):
+                    //      If the RST bit is set, then any outstanding RECEIVEs and SEND should
+                    //      receive "reset" responses. All segment queues should be flushed. Users
+                    //      should also receive an unsolicited general "connection reset" signal.
+                    //      Enter the CLOSED state, delete the TCB, and return.
+                    log::error!("[ TCP ] Connection Reset");
+                    self.state = State::Closed;
+                    return;
+                }
+
+                State::Closing | State::LastAck | State::TimeWait => {
+                    self.state = State::Closed;
+                    return;
+                }
+
+                _ => {}
+            }
+        }
+
+        // Third, check security and precedence [ignored].
+
+        // Fourth, check the SYN bit.
+        if flags.contains(TcpFlags::SYN) {}
+
+        // Fifth, check the ACK field.
+        if !flags.contains(TcpFlags::ACK) {
+            return;
+        }
+
+        match self.state {
+            State::SynRecv => {
+                if is_between_wrapped(
+                    self.send.una,
+                    tcp.ack_number(),
+                    self.send.nxt.wrapping_add(1),
+                ) {
+                    self.send.wnd = tcp.window();
+                    self.send.wl1 = tcp.sequence_number();
+                    self.send.wl2 = tcp.ack_number();
+
+                    // ACKed the SYN (i.e, at least one acked byte and we have only sent the SYN).
+                    self.state = State::Established;
+                } else {
+                    // Segment acknowledgment is not acceptable, send a reset.
+                    self.send_with_flags(tcp.ack_number(), TcpFlags::RST);
+                    return;
+                }
             }
 
             State::Established
@@ -509,8 +563,19 @@ impl<D: NetworkDevice> Socket<D> {
             state => todo!("{state:?}"),
         }
 
+        if flags.contains(TcpFlags::URG) {
+            match self.state {
+                State::Established | State::FinWait1 | State::FinWait2 => todo!(),
+
+                // This should not occur since a FIN has been received from the remote side. Ignore
+                // the URG.
+                _ => {}
+            }
+        }
+
+        // Seventh, process the segment text.
         match self.state {
-            State::Established if !payload.is_empty() => {
+            State::Established | State::FinWait1 | State::FinWait2 if !payload.is_empty() => {
                 let seq_number = tcp.sequence_number();
                 if seq_number != self.recv.nxt {
                     log::warn!("[ TCP ] Recieved out of order packet");
@@ -526,9 +591,12 @@ impl<D: NetworkDevice> Socket<D> {
                 self.send_with_flags(self.send.nxt, TcpFlags::ACK);
             }
 
+            // This should not occur since a FIN has been received from the remote side. Ignore the
+            // segment text.
             _ => {}
         }
 
+        // Eighth, check the FIN bit.
         if flags.contains(TcpFlags::FIN) {
             match self.state {
                 State::SynRecv | State::Established => {

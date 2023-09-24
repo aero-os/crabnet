@@ -104,7 +104,11 @@ pub fn main() -> io::Result<()> {
         }
 
         let tcp = packet_parser.next::<Tcp>();
-        let options = packet_parser.next::<TcpOptions>();
+        let options = packet_parser
+            .next::<TcpOptions>()
+            .iter()
+            .collect::<Vec<_>>();
+
         log::debug!("[ TCP ] Options: {options:?}");
 
         let payload = packet_parser.payload();

@@ -149,6 +149,125 @@ crate::impl_stack!(@make Tcp {
 });
 
 #[derive(Debug)]
+pub enum TcpOptionErr {
+    /// The TCP option had an invalid size.
+    InvalidSize,
+    /// Unknown TCP option.
+    UnknownOption { kind: u8, size: u8 },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TcpOption {
+    /// The maximum receive segment size at the TCP endpoint that sends this segment.
+    MaxSegmentSize(u16),
+    /// The first number is the sender timestamp and the latter is the echo timestamp.
+    TimeStamp(u32, u32),
+    WindowScale(u8),
+    /// Selective ACKs are permitted.
+    SackPermitted,
+}
+
+pub struct TcpOptionsIter<'a> {
+    options: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> Iterator for TcpOptionsIter<'a> {
+    type Item = Result<TcpOption, TcpOptionErr>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        const TCP_OPTEOL: u8 = 0;
+        const TCP_OPTNOP: u8 = 1;
+        const TCP_OPTMSS: u8 = 2;
+        const TCP_OPTWINDOW_SCALE: u8 = 3;
+        const TCP_OPTSACKPERM: u8 = 4;
+        // const TCP_OPTSACK: u8 = 5;
+        const TCP_OPTTIMESTAMPS: u8 = 8;
+
+        // FIXME(andypython): In this case, it is an unexpected end of options list (i.e, the
+        // EOL option was not found). Should we return an error instead?
+        let kind = *self.options.get(self.cursor)?;
+
+        if kind == TCP_OPTEOL {
+            // EOL (used for delimiting the options list)
+            return None;
+        } else if kind == TCP_OPTNOP {
+            // NOP (used for padding)
+            self.cursor += 1;
+            return self.next();
+        }
+
+        let option_size = *self.options.get(self.cursor + 1)?;
+
+        // `expected_size` is the size in bytes of the option with the kind and size fields.
+        let mut ensure_size = |expected_size: usize| {
+            if (option_size as usize) != expected_size {
+                self.cursor += option_size as usize;
+                return Err(TcpOptionErr::InvalidSize);
+            }
+
+            if (self.cursor + expected_size) > self.options.len() {
+                self.cursor += expected_size;
+                return Err(TcpOptionErr::InvalidSize);
+            }
+
+            let data_start = self.cursor + 2;
+            let data_end = self.cursor + expected_size;
+
+            let option = &self.options[data_start..data_end];
+            self.cursor += expected_size;
+            Ok(option)
+        };
+
+        match kind {
+            TCP_OPTMSS => match ensure_size(4) {
+                Ok(data) => {
+                    let mss = u16::from_be_bytes([data[0], data[1]]);
+                    Some(Ok(TcpOption::MaxSegmentSize(mss)))
+                }
+
+                Err(err) => Some(Err(err)),
+            },
+
+            TCP_OPTWINDOW_SCALE => match ensure_size(3) {
+                Ok(data) => Some(Ok(TcpOption::WindowScale(data[0]))),
+                Err(err) => Some(Err(err)),
+            },
+
+            TCP_OPTTIMESTAMPS => match ensure_size(10) {
+                Ok(data) => {
+                    let init_ts = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                    let echo_ts = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+                    Some(Ok(TcpOption::TimeStamp(init_ts, echo_ts)))
+                }
+
+                Err(err) => Some(Err(err)),
+            },
+
+            TCP_OPTSACKPERM => match ensure_size(2) {
+                Ok(_) => Some(Ok(TcpOption::SackPermitted)),
+                Err(err) => Some(Err(err)),
+            },
+
+            _ => {
+                if option_size == 0 {
+                    // Invalid option length.
+                    Some(Err(TcpOptionErr::InvalidSize))
+                } else {
+                    // Unknown option, skip it.
+                    self.cursor += option_size as usize;
+
+                    Some(Err(TcpOptionErr::UnknownOption {
+                        kind,
+                        size: option_size,
+                    }))
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct TcpOptions<'a>(&'a [u8]);
 
 impl<'a> TcpOptions<'a> {
@@ -156,6 +275,13 @@ impl<'a> TcpOptions<'a> {
     #[inline]
     pub fn as_slice(&self) -> &'a [u8] {
         self.0
+    }
+
+    pub fn iter(&self) -> TcpOptionsIter<'a> {
+        TcpOptionsIter {
+            options: self.0,
+            cursor: 0,
+        }
     }
 }
 

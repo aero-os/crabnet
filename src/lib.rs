@@ -285,7 +285,9 @@ impl<'a> PacketParser<'a> {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::transport::TcpOptions;
+    use alloc::vec::Vec;
+
+    use crate::transport::{TcpOption, TcpOptions};
 
     use super::data_link::{Eth, EthType, MacAddr};
     use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
@@ -386,6 +388,18 @@ pub mod tests {
         assert_eq!(
             options.as_slice(),
             &[2, 4, 5, 180, 4, 2, 8, 10, 151, 174, 53, 222, 0, 0, 0, 0, 1, 3, 3, 7]
+        );
+
+        let options = options.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
+
+        assert_eq!(
+            options.as_slice(),
+            &[
+                TcpOption::MaxSegmentSize(1460),
+                TcpOption::SackPermitted,
+                TcpOption::TimeStamp(2544776670, 0),
+                TcpOption::WindowScale(7)
+            ]
         );
     }
 }

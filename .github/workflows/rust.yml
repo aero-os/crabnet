@@ -10,6 +10,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_LOG: trace
 
+permissions:
+  contents: write
+
 jobs:
   build:
 
@@ -25,3 +28,10 @@ jobs:
       run: cargo build --verbose --manifest-path crabnet_tcp/Cargo.toml
     - name: Run tests for `crabnet_tcp`
       run: cargo test --verbose --manifest-path crabnet_tcp/Cargo.toml
+    - name: Build documentation for `crabnet`
+      run: cargo doc
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./target/doc/crabnet

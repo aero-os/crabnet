@@ -35,19 +35,19 @@ const_assert_eq!(core::mem::size_of::<Tcp>(), 20);
 
 impl Tcp {
     pub fn new(src_port: u16, dest_port: u16) -> Self {
-        let mut flags = 0;
-        flags.set_bits(12..=15, core::mem::size_of::<Self>() as u16 / 4);
-
-        Self {
+        let mut tcp = Self {
             src_port: src_port.into(),
             dest_port: dest_port.into(),
             seq_nr: 0.into(),
             ack_nr: 0.into(),
-            flags: flags.into(),
+            flags: 0.into(),
             window: 0.into(),
             checksum: 0.into(),
             urgent_ptr: 0.into(),
-        }
+        };
+
+        tcp.set_header_size(core::mem::size_of::<Self>() as u8);
+        tcp
     }
 
     #[inline]
@@ -116,6 +116,19 @@ impl Tcp {
         header_size as u8 * core::mem::size_of::<u32>() as u8
     }
 
+    /// Sets the header size to `size`.
+    ///
+    /// # Panics
+    /// This function panics if `size` is less than the size of the TCP header.
+    #[inline]
+    fn set_header_size(&mut self, size: u8) {
+        assert!(size >= core::mem::size_of::<Self>() as u8);
+
+        let mut flags = self.flags.to_native();
+        flags.set_bits(12..=15, size as u16 / 4);
+        self.flags = flags.into();
+    }
+
     #[inline]
     pub fn options_size(&self) -> u8 {
         self.header_size() - core::mem::size_of::<Tcp>() as u8
@@ -148,6 +161,24 @@ crate::impl_stack!(@make Tcp {
     }
 });
 
+const TCP_OPTEOL: u8 = 0;
+
+const TCP_OPTNOP: u8 = 1;
+const TCP_LENNOP: usize = 1;
+
+const TCP_OPTMSS: u8 = 2;
+const TCP_LENMSS: usize = 4;
+
+const TCP_OPTWINDOW_SCALE: u8 = 3;
+const TCP_LENWINDOW_SCALE: usize = 3;
+
+const TCP_OPTSACKPERM: u8 = 4;
+const TCP_LENSACKPERM: usize = 2;
+
+// const TCP_OPTSACK: u8 = 5;
+const TCP_OPTTIMESTAMPS: u8 = 8;
+const TCP_LENTIMESTAMPS: usize = 10;
+
 #[derive(Debug)]
 pub enum TcpOptionErr {
     /// The TCP option had an invalid size.
@@ -176,14 +207,6 @@ impl<'a> Iterator for TcpOptionsIter<'a> {
     type Item = Result<TcpOption, TcpOptionErr>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        const TCP_OPTEOL: u8 = 0;
-        const TCP_OPTNOP: u8 = 1;
-        const TCP_OPTMSS: u8 = 2;
-        const TCP_OPTWINDOW_SCALE: u8 = 3;
-        const TCP_OPTSACKPERM: u8 = 4;
-        // const TCP_OPTSACK: u8 = 5;
-        const TCP_OPTTIMESTAMPS: u8 = 8;
-
         // FIXME(andypython): In this case, it is an unexpected end of options list (i.e, the
         // EOL option was not found). Should we return an error instead?
         let kind = *self.options.get(self.cursor)?;
@@ -193,7 +216,7 @@ impl<'a> Iterator for TcpOptionsIter<'a> {
             return None;
         } else if kind == TCP_OPTNOP {
             // NOP (used for padding)
-            self.cursor += 1;
+            self.cursor += TCP_LENNOP;
             return self.next();
         }
 
@@ -220,7 +243,7 @@ impl<'a> Iterator for TcpOptionsIter<'a> {
         };
 
         match kind {
-            TCP_OPTMSS => match ensure_size(4) {
+            TCP_OPTMSS => match ensure_size(TCP_LENMSS) {
                 Ok(data) => {
                     let mss = u16::from_be_bytes([data[0], data[1]]);
                     Some(Ok(TcpOption::MaxSegmentSize(mss)))
@@ -229,23 +252,23 @@ impl<'a> Iterator for TcpOptionsIter<'a> {
                 Err(err) => Some(Err(err)),
             },
 
-            TCP_OPTWINDOW_SCALE => match ensure_size(3) {
+            TCP_OPTWINDOW_SCALE => match ensure_size(TCP_LENWINDOW_SCALE) {
                 Ok(data) => Some(Ok(TcpOption::WindowScale(data[0]))),
                 Err(err) => Some(Err(err)),
             },
 
-            TCP_OPTTIMESTAMPS => match ensure_size(10) {
+            TCP_OPTSACKPERM => match ensure_size(TCP_LENSACKPERM) {
+                Ok(_) => Some(Ok(TcpOption::SackPermitted)),
+                Err(err) => Some(Err(err)),
+            },
+
+            TCP_OPTTIMESTAMPS => match ensure_size(TCP_LENTIMESTAMPS) {
                 Ok(data) => {
                     let init_ts = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
                     let echo_ts = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
                     Some(Ok(TcpOption::TimeStamp(init_ts, echo_ts)))
                 }
 
-                Err(err) => Some(Err(err)),
-            },
-
-            TCP_OPTSACKPERM => match ensure_size(2) {
-                Ok(_) => Some(Ok(TcpOption::SackPermitted)),
                 Err(err) => Some(Err(err)),
             },
 
@@ -267,6 +290,71 @@ impl<'a> Iterator for TcpOptionsIter<'a> {
     }
 }
 
+pub struct TcpOptionsBuilder {
+    // XXX: The maximum size of the TCP options is 40 bytes.
+    options: [u8; 40],
+    cursor: usize,
+}
+
+impl TcpOptionsBuilder {
+    pub fn new() -> Self {
+        Self {
+            options: [0; 40],
+            cursor: 0,
+        }
+    }
+
+    pub fn with(mut self, option: TcpOption) -> Self {
+        match option {
+            TcpOption::MaxSegmentSize(mss) => {
+                self.options[self.cursor] = TCP_OPTMSS;
+                self.options[self.cursor + 1] = TCP_LENMSS as u8;
+                self.options[self.cursor + 2..self.cursor + TCP_LENMSS]
+                    .copy_from_slice(&mss.to_be_bytes());
+
+                self.cursor += TCP_LENMSS;
+            }
+
+            TcpOption::WindowScale(scale) => {
+                self.options[self.cursor] = TCP_OPTWINDOW_SCALE;
+                self.options[self.cursor + 1] = TCP_LENWINDOW_SCALE as u8;
+                self.options[self.cursor + 2] = scale;
+
+                self.cursor += TCP_LENWINDOW_SCALE;
+            }
+
+            TcpOption::SackPermitted => {
+                self.options[self.cursor] = TCP_OPTSACKPERM;
+                self.options[self.cursor + 1] = TCP_LENSACKPERM as u8;
+
+                self.cursor += TCP_LENSACKPERM;
+            }
+
+            TcpOption::TimeStamp(init_ts, echo_ts) => {
+                let init_ts = init_ts.to_be_bytes();
+                let echo_ts = echo_ts.to_be_bytes();
+
+                self.options[self.cursor] = TCP_OPTTIMESTAMPS;
+                self.options[self.cursor + 1] = TCP_LENTIMESTAMPS as u8;
+
+                self.options[self.cursor + 2..self.cursor + 6].copy_from_slice(&init_ts);
+                self.options[self.cursor + 6..self.cursor + 10].copy_from_slice(&echo_ts);
+
+                self.cursor += TCP_LENTIMESTAMPS;
+            }
+        }
+
+        self
+    }
+
+    pub fn build<'a>(&'a mut self) -> TcpOptions<'a> {
+        self.options[self.cursor] = TCP_OPTEOL;
+        self.cursor += 1;
+
+        TcpOptions(&self.options[..self.cursor])
+    }
+}
+
 #[derive(Debug)]
 pub struct TcpOptions<'a>(&'a [u8]);
 
@@ -277,11 +365,19 @@ impl<'a> TcpOptions<'a> {
         self.0
     }
 
+    #[inline]
     pub fn iter(&self) -> TcpOptionsIter<'a> {
         TcpOptionsIter {
             options: self.0,
             cursor: 0,
         }
+    }
+}
+
+impl<'a> From<&'a [u8]> for TcpOptions<'a> {
+    #[inline]
+    fn from(value: &'a [u8]) -> Self {
+        Self(value)
     }
 }
 
@@ -348,6 +444,15 @@ unsafe impl<'a> Protocol for TcpOptions<'a> {
                 self.0.len(),
             );
         }
+
+        let header_size = core::mem::size_of::<Tcp>();
+
+        // SAFETY: We only implement Stack<Tcp, TcpOptions> for [`TcpOptions`] and we do not
+        // implement [`IsSafeToWrite`], so we know that the the parent layer is TCP. In addition,
+        // the caller must guarantee that we have exclusive access to the whole packet thus, the
+        // pointer dereference is valid.
+        let tcp = unsafe { mem.sub(header_size).cast::<Tcp>().as_mut() };
+        tcp.set_header_size(self.0.len() as u8 + header_size as u8);
     }
 
     #[inline]

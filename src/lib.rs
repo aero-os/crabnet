@@ -1,4 +1,4 @@
-#![no_std]
+// #![no_std]
 #![feature(allocator_api, trivial_bounds, new_uninit, associated_type_defaults)]
 
 extern crate alloc;
@@ -287,7 +287,7 @@ impl<'a> PacketParser<'a> {
 pub mod tests {
     use alloc::vec::Vec;
 
-    use crate::transport::{TcpOption, TcpOptions};
+    use crate::transport::{TcpOption, TcpOptions, TcpOptionsBuilder};
 
     use super::data_link::{Eth, EthType, MacAddr};
     use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
@@ -401,5 +401,28 @@ pub mod tests {
                 TcpOption::WindowScale(7)
             ]
         );
+    }
+
+    #[test]
+    fn tcp_options_build() {
+        const RAW_PACKET: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 69, 0, 0, 64, 0, 0, 0, 0, 64, 6, 122, 185,
+            255, 255, 255, 255, 255, 255, 255, 255, 31, 144, 0, 80, 0, 0, 0, 0, 0, 0, 0, 0, 160, 0,
+            0, 0, 202, 14, 0, 0, 2, 4, 5, 180, 4, 2, 8, 10, 151, 174, 53, 222, 0, 0, 0, 0, 3, 3, 7,
+            0, 69, 69, 69, 69,
+        ];
+
+        let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);
+        let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Tcp);
+        let tcp = Tcp::new(8080, 80);
+        let mut options = TcpOptionsBuilder::new()
+            .with(TcpOption::MaxSegmentSize(1460))
+            .with(TcpOption::SackPermitted)
+            .with(TcpOption::TimeStamp(2544776670, 0))
+            .with(TcpOption::WindowScale(7));
+
+        let options = options.build();
+        let packet = (eth / ip / tcp / options / [69u8; 4]).into_boxed_bytes();
+        assert_eq!(&*packet, RAW_PACKET)
     }
 }

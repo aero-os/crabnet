@@ -348,6 +348,10 @@ impl TcpOptionsBuilder {
     }
 
     pub fn build<'a>(&'a mut self) -> TcpOptions<'a> {
+        if self.cursor == 0 {
+            return TcpOptions(&[]);
+        }
+
         self.options[self.cursor] = TCP_OPTEOL;
         self.cursor += 1;
 
@@ -443,6 +447,10 @@ unsafe impl<'a> Protocol for TcpOptions<'a> {
                 mem.as_ptr().cast::<u8>(),
                 self.0.len(),
             );
+        }
+
+        if self.0.is_empty() {
+            return;
         }
 
         let header_size = core::mem::size_of::<Tcp>();

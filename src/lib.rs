@@ -1,4 +1,4 @@
-// #![no_std]
+#![no_std]
 #![feature(allocator_api, trivial_bounds, new_uninit, associated_type_defaults)]
 
 extern crate alloc;

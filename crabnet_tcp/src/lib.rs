@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use core::time::Duration;
 
 use crabnet::network::{Ipv4, Ipv4Addr, Ipv4Type};
-use crabnet::transport::{Tcp, TcpFlags};
+use crabnet::transport::{Tcp, TcpFlags, TcpOption, TcpOptionsBuilder};
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]
 pub enum State {
@@ -128,10 +128,13 @@ pub enum Error {
     WouldBlock,
 }
 
+const DEFAULT_MSS: u16 = 1460;
+
 pub struct Socket<D: NetworkDevice> {
     state: State,
     recv: RecvSequenceSpace,
     send: SendSequenceSpace,
+    mss: u16,
     pub addr: Address,
     pub recv_queue: Vec<u8>,
     pub device: Arc<D>,
@@ -145,6 +148,8 @@ impl<D: NetworkDevice> Socket<D> {
             send: SendSequenceSpace::default(),
             state: State::default(),
             recv_queue: Vec::new(),
+            // TODO: Get the MSS from the network device.
+            mss: DEFAULT_MSS,
             addr: address,
         }
     }
@@ -156,6 +161,8 @@ impl<D: NetworkDevice> Socket<D> {
             send: SendSequenceSpace::default(),
             state: State::default(),
             recv_queue: Vec::new(),
+            // TODO: Get the MSS from the network device.
+            mss: DEFAULT_MSS,
             addr: address,
         };
 
@@ -168,15 +175,22 @@ impl<D: NetworkDevice> Socket<D> {
 
     pub fn send_raw(&mut self, seq_number: u32, flags: TcpFlags, payload: &[u8]) {
         let mut next_seq = seq_number.wrapping_add(payload.len() as u32);
+        let mut options = TcpOptionsBuilder::new();
+
         if flags.contains(TcpFlags::SYN) {
             next_seq = next_seq.wrapping_add(1);
+
+            // FIXME(andypython): This should be device.mss()
+            options = options
+                .with(TcpOption::MaxSegmentSize(DEFAULT_MSS))
+                .with(TcpOption::WindowScale(7));
         }
 
         if flags.contains(TcpFlags::FIN) {
             next_seq = next_seq.wrapping_add(1);
         }
 
-        let ip = Ipv4::new(Ipv4Addr::NULL, self.addr.dest_ip, Ipv4Type::Tcp);
+        let ip = Ipv4::new(self.device.ip(), self.addr.dest_ip, Ipv4Type::Tcp);
         let tcp = Tcp::new(self.addr.src_port, self.addr.dest_port)
             .set_flags(flags)
             .set_window(self.send.wnd)
@@ -190,7 +204,15 @@ impl<D: NetworkDevice> Socket<D> {
         let retransmit_duration = Duration::from_millis(100);
         let retransmit_handle = RetransmitHandle::new(seq_number, retransmit_duration);
 
-        self.device.send(ip, tcp, payload, retransmit_handle);
+        self.device.send(
+            Packet {
+                ip,
+                tcp,
+                options,
+                payload,
+            },
+            retransmit_handle,
+        );
     }
 
     #[inline]
@@ -280,7 +302,18 @@ impl<D: NetworkDevice> Socket<D> {
         }
     }
 
-    pub fn on_packet(&mut self, tcp: &Tcp, payload: &[u8]) {
+    pub fn on_packet(&mut self, tcp: &Tcp, options: &[TcpOption], payload: &[u8]) {
+        // Parse the TCP options.
+        for option in options.iter() {
+            match option {
+                TcpOption::MaxSegmentSize(mss) => {
+                    self.mss = *mss;
+                }
+
+                _ => {}
+            }
+        }
+
         let flags = tcp.flags();
         let mut acceptable = false;
 
@@ -673,8 +706,16 @@ impl RetransmitHandle {
     }
 }
 
+pub struct Packet<'a> {
+    pub ip: Ipv4,
+    pub tcp: Tcp,
+    pub options: TcpOptionsBuilder,
+    pub payload: &'a [u8],
+}
+
 pub trait NetworkDevice: Send + Sync {
-    fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle);
+    fn send(&self, packet: Packet, handle: RetransmitHandle);
+    fn ip(&self) -> Ipv4Addr;
 
     /// Removes the retransmit handle from the retransmit queue.
     fn remove_retransmit(&self, seq_number: u32);

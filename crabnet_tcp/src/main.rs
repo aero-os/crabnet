@@ -2,7 +2,7 @@ use crabnet::data_link::EthType;
 use crabnet::network::{Ipv4, Ipv4Addr, Ipv4Type};
 use crabnet::transport::{Tcp, TcpOptions};
 use crabnet::{IntoBoxedBytes, PacketParser, Protocol};
-use crabnet_tcp::{Address, NetworkDevice, RetransmitHandle, Socket as TcpSocket};
+use crabnet_tcp::{Address, NetworkDevice, Packet, RetransmitHandle, Socket as TcpSocket};
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -57,7 +57,12 @@ impl Tun {
 }
 
 impl NetworkDevice for Tun {
-    fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
+    fn ip(&self) -> Ipv4Addr {
+        // The IP is set in the run.sh script.
+        Ipv4Addr::new([192, 168, 0, 2])
+    }
+
+    fn send(&self, mut packet: Packet, handle: RetransmitHandle) {
         use crabnet::data_link::Tun;
 
         self.queue.lock().unwrap().insert(
@@ -68,11 +73,9 @@ impl NetworkDevice for Tun {
             },
         );
 
-        // The IP is set in the run.sh script.
-        let ipv4 = ipv4.set_src_ip(Ipv4Addr::new([192, 168, 0, 2]));
-
         let tun = Tun::new(0, EthType::Ip);
-        let packet = (tun / ipv4 / tcp / payload).into_boxed_bytes();
+        let packet = (tun / packet.ip / packet.tcp / packet.options.build() / packet.payload)
+            .into_boxed_bytes();
 
         self.iface
             .send(&packet)
@@ -107,6 +110,7 @@ pub fn main() -> io::Result<()> {
         let options = packet_parser
             .next::<TcpOptions>()
             .iter()
+            .filter_map(|option| option.ok())
             .collect::<Vec<_>>();
 
         log::debug!("[ TCP ] Options: {options:?}");
@@ -114,7 +118,7 @@ pub fn main() -> io::Result<()> {
         let payload = packet_parser.payload();
 
         if let Some(tcp_socket) = tcp_socket.as_mut() {
-            tcp_socket.on_packet(tcp, payload);
+            tcp_socket.on_packet(tcp, &options, payload);
 
             if tcp_socket.state() == crabnet_tcp::State::Established && !done {
                 tcp_socket.send(b"okay!").unwrap();
@@ -139,7 +143,7 @@ mod test {
     // TODO: ensure empty after await
 
     use crabnet::data_link::{self, MacAddr};
-    use crabnet_tcp::State;
+    use crabnet_tcp::{Packet, State};
     use pcap_file::pcap::{PcapPacket, PcapWriter};
 
     use std::fs::OpenOptions;
@@ -206,14 +210,14 @@ mod test {
 
     /// A network packet.
     #[derive(Debug, Clone)]
-    struct Packet(Box<[u8]>);
+    struct FakePacket(Box<[u8]>);
 
     /// Fake network device.
     struct FakeDevice {
         /// Receive queue of this device.
-        this: Arc<Mutex<Vec<Packet>>>,
+        this: Arc<Mutex<Vec<FakePacket>>>,
         /// Receive of the peer device.
-        peer: Arc<Mutex<Vec<Packet>>>,
+        peer: Arc<Mutex<Vec<FakePacket>>>,
         /// The TCP re-transmit queue.
         queue: Mutex<HashMap<u32, RetransmitEntry>>,
         /// Name of the device; useful for debugging.
@@ -238,9 +242,15 @@ mod test {
     }
 
     impl NetworkDevice for FakeDevice {
-        fn send(&self, ipv4: Ipv4, tcp: Tcp, payload: &[u8], handle: RetransmitHandle) {
+        #[inline]
+        fn ip(&self) -> Ipv4Addr {
+            Ipv4Addr::NULL
+        }
+
+        fn send(&self, mut packet: Packet, handle: RetransmitHandle) {
             let eth = data_link::Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);
-            let packet = (eth / ipv4 / tcp / payload).into_boxed_bytes();
+            let packet = (eth / packet.ip / packet.tcp / packet.options.build() / packet.payload)
+                .into_boxed_bytes();
 
             let seq_number = handle.seq_number;
             let rt_entry = RetransmitEntry {
@@ -262,7 +272,7 @@ mod test {
                 .unwrap();
 
             self.queue.lock().unwrap().insert(seq_number, rt_entry);
-            self.peer.lock().unwrap().push(Packet(packet));
+            self.peer.lock().unwrap().push(FakePacket(packet));
         }
 
         fn remove_retransmit(&self, seq_number: u32) {
@@ -282,7 +292,7 @@ mod test {
 
             for timer in queue.values_mut() {
                 if now - timer.now >= timer.handle.duration {
-                    peer.push(Packet(timer.raw.clone().into_boxed_slice()));
+                    peer.push(FakePacket(timer.raw.clone().into_boxed_slice()));
                     timer.handle.duration *= 2;
                 }
             }
@@ -363,7 +373,7 @@ mod test {
                 let options_size = tcp.header_size() as usize - tcp.write_len();
                 let payload = &packet_parser.payload()[options_size..];
 
-                self.0.on_packet(tcp, payload);
+                self.0.on_packet(tcp, &[], payload);
                 break;
             }
         }

@@ -287,7 +287,7 @@ impl<'a> PacketParser<'a> {
 pub mod tests {
     use alloc::vec::Vec;
 
-    use crate::transport::{TcpOption, TcpOptions, TcpOptionsBuilder};
+    use crate::transport::{TcpOption, TcpOptions};
 
     use super::data_link::{Eth, EthType, MacAddr};
     use super::network::{Ipv4, Ipv4Addr, Ipv4Type};
@@ -415,13 +415,12 @@ pub mod tests {
         let eth = Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);
         let ip = Ipv4::new(Ipv4Addr::BROADCAST, Ipv4Addr::BROADCAST, Ipv4Type::Tcp);
         let tcp = Tcp::new(8080, 80);
-        let mut options = TcpOptionsBuilder::new()
+        let options = TcpOptions::new()
             .with(TcpOption::MaxSegmentSize(1460))
             .with(TcpOption::SackPermitted)
             .with(TcpOption::TimeStamp(2544776670, 0))
             .with(TcpOption::WindowScale(7));
 
-        let options = options.build();
         let packet = (eth / ip / tcp / options / [69u8; 4]).into_boxed_bytes();
         assert_eq!(&*packet, RAW_PACKET)
     }

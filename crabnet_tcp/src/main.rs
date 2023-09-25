@@ -62,7 +62,7 @@ impl NetworkDevice for Tun {
         Ipv4Addr::new([192, 168, 0, 2])
     }
 
-    fn send(&self, mut packet: Packet, handle: RetransmitHandle) {
+    fn send(&self, packet: Packet, handle: RetransmitHandle) {
         use crabnet::data_link::Tun;
 
         self.queue.lock().unwrap().insert(
@@ -74,8 +74,8 @@ impl NetworkDevice for Tun {
         );
 
         let tun = Tun::new(0, EthType::Ip);
-        let packet = (tun / packet.ip / packet.tcp / packet.options.build() / packet.payload)
-            .into_boxed_bytes();
+        let packet =
+            (tun / packet.ip / packet.tcp / packet.options / packet.payload).into_boxed_bytes();
 
         self.iface
             .send(&packet)
@@ -247,10 +247,10 @@ mod test {
             Ipv4Addr::NULL
         }
 
-        fn send(&self, mut packet: Packet, handle: RetransmitHandle) {
+        fn send(&self, packet: Packet, handle: RetransmitHandle) {
             let eth = data_link::Eth::new(MacAddr::NULL, MacAddr::NULL, EthType::Ip);
-            let packet = (eth / packet.ip / packet.tcp / packet.options.build() / packet.payload)
-                .into_boxed_bytes();
+            let packet =
+                (eth / packet.ip / packet.tcp / packet.options / packet.payload).into_boxed_bytes();
 
             let seq_number = handle.seq_number;
             let rt_entry = RetransmitEntry {

@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use core::time::Duration;
 
 use crabnet::network::{Ipv4, Ipv4Addr, Ipv4Type};
-use crabnet::transport::{Tcp, TcpFlags, TcpOption, TcpOptionsBuilder};
+use crabnet::transport::{Tcp, TcpFlags, TcpOption, TcpOptions};
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]
 pub enum State {
@@ -175,7 +175,7 @@ impl<D: NetworkDevice> Socket<D> {
 
     pub fn send_raw(&mut self, seq_number: u32, flags: TcpFlags, payload: &[u8]) {
         let mut next_seq = seq_number.wrapping_add(payload.len() as u32);
-        let mut options = TcpOptionsBuilder::new();
+        let mut options = TcpOptions::new();
 
         if flags.contains(TcpFlags::SYN) {
             next_seq = next_seq.wrapping_add(1);
@@ -709,7 +709,7 @@ impl RetransmitHandle {
 pub struct Packet<'a> {
     pub ip: Ipv4,
     pub tcp: Tcp,
-    pub options: TcpOptionsBuilder,
+    pub options: TcpOptions,
     pub payload: &'a [u8],
 }
 

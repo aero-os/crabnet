@@ -162,6 +162,7 @@ crate::impl_stack!(@make Tcp {
 });
 
 const TCP_OPTEOL: u8 = 0;
+const TCP_LENEOL: usize = 1;
 
 const TCP_OPTNOP: u8 = 1;
 const TCP_LENNOP: usize = 1;
@@ -290,105 +291,82 @@ impl<'a> Iterator for TcpOptionsIter<'a> {
     }
 }
 
-pub struct TcpOptionsBuilder {
-    // XXX: The maximum size of the TCP options is 40 bytes.
+#[derive(Debug)]
+pub struct TcpOptions {
     options: [u8; 40],
-    cursor: usize,
+    size: usize,
 }
 
-impl TcpOptionsBuilder {
+impl TcpOptions {
+    /// Returns the TCP options as a byte slice.
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.options[..self.size]
+    }
+
+    #[inline]
+    pub fn iter(&self) -> TcpOptionsIter {
+        TcpOptionsIter {
+            options: self.as_slice(),
+            cursor: 0,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             options: [0; 40],
-            cursor: 0,
+            size: 0,
         }
     }
 
     pub fn with(mut self, option: TcpOption) -> Self {
         match option {
             TcpOption::MaxSegmentSize(mss) => {
-                self.options[self.cursor] = TCP_OPTMSS;
-                self.options[self.cursor + 1] = TCP_LENMSS as u8;
-                self.options[self.cursor + 2..self.cursor + TCP_LENMSS]
+                self.options[self.size] = TCP_OPTMSS;
+                self.options[self.size + 1] = TCP_LENMSS as u8;
+                self.options[self.size + 2..self.size + TCP_LENMSS]
                     .copy_from_slice(&mss.to_be_bytes());
 
-                self.cursor += TCP_LENMSS;
+                self.size += TCP_LENMSS;
             }
 
             TcpOption::WindowScale(scale) => {
-                self.options[self.cursor] = TCP_OPTWINDOW_SCALE;
-                self.options[self.cursor + 1] = TCP_LENWINDOW_SCALE as u8;
-                self.options[self.cursor + 2] = scale;
+                self.options[self.size] = TCP_OPTWINDOW_SCALE;
+                self.options[self.size + 1] = TCP_LENWINDOW_SCALE as u8;
+                self.options[self.size + 2] = scale;
 
-                self.cursor += TCP_LENWINDOW_SCALE;
+                self.size += TCP_LENWINDOW_SCALE;
             }
 
             TcpOption::SackPermitted => {
-                self.options[self.cursor] = TCP_OPTSACKPERM;
-                self.options[self.cursor + 1] = TCP_LENSACKPERM as u8;
+                self.options[self.size] = TCP_OPTSACKPERM;
+                self.options[self.size + 1] = TCP_LENSACKPERM as u8;
 
-                self.cursor += TCP_LENSACKPERM;
+                self.size += TCP_LENSACKPERM;
             }
 
             TcpOption::TimeStamp(init_ts, echo_ts) => {
                 let init_ts = init_ts.to_be_bytes();
                 let echo_ts = echo_ts.to_be_bytes();
 
-                self.options[self.cursor] = TCP_OPTTIMESTAMPS;
-                self.options[self.cursor + 1] = TCP_LENTIMESTAMPS as u8;
+                self.options[self.size] = TCP_OPTTIMESTAMPS;
+                self.options[self.size + 1] = TCP_LENTIMESTAMPS as u8;
 
-                self.options[self.cursor + 2..self.cursor + 6].copy_from_slice(&init_ts);
-                self.options[self.cursor + 6..self.cursor + 10].copy_from_slice(&echo_ts);
+                self.options[self.size + 2..self.size + 6].copy_from_slice(&init_ts);
+                self.options[self.size + 6..self.size + 10].copy_from_slice(&echo_ts);
 
-                self.cursor += TCP_LENTIMESTAMPS;
+                self.size += TCP_LENTIMESTAMPS;
             }
         }
 
         self
     }
-
-    pub fn build<'a>(&'a mut self) -> TcpOptions<'a> {
-        if self.cursor == 0 {
-            return TcpOptions(&[]);
-        }
-
-        self.options[self.cursor] = TCP_OPTEOL;
-        self.cursor += 1;
-
-        TcpOptions(&self.options[..self.cursor])
-    }
 }
 
-#[derive(Debug)]
-pub struct TcpOptions<'a>(&'a [u8]);
+unsafe impl Parsable<'_> for TcpOptions {
+    type Output = TcpOptions;
 
-impl<'a> TcpOptions<'a> {
-    /// Returns the TCP options as a byte slice.
-    #[inline]
-    pub fn as_slice(&self) -> &'a [u8] {
-        self.0
-    }
-
-    #[inline]
-    pub fn iter(&self) -> TcpOptionsIter<'a> {
-        TcpOptionsIter {
-            options: self.0,
-            cursor: 0,
-        }
-    }
-}
-
-impl<'a> From<&'a [u8]> for TcpOptions<'a> {
-    #[inline]
-    fn from(value: &'a [u8]) -> Self {
-        Self(value)
-    }
-}
-
-unsafe impl<'a> Parsable<'a> for TcpOptions<'a> {
-    type Output = TcpOptions<'a>;
-
-    fn parse<'b>(mem: *const u8, size: usize) -> crate::Parsed<TcpOptions<'a>> {
+    fn parse<'b>(mem: *const u8, size: usize) -> crate::Parsed<TcpOptions> {
         let header_size = core::mem::size_of::<Tcp>();
 
         // SAFETY: We only implement Stack<Tcp, TcpOptions> for [`TcpOptions`] and we do not
@@ -398,21 +376,28 @@ unsafe impl<'a> Parsable<'a> for TcpOptions<'a> {
         let options_size = tcp.options_size() as usize;
 
         // TODO: Invalid header, return an error.
-        assert!(options_size <= size);
+        assert!(options_size <= size && size <= 40);
 
-        let options = unsafe { core::slice::from_raw_parts(mem, options_size) };
+        let mut options = [0; 40];
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(mem, options.as_mut_ptr(), options_size);
+        }
 
         Parsed {
-            value: TcpOptions(options),
+            value: TcpOptions {
+                options,
+                size: options_size,
+            },
             size: options_size,
         }
     }
 }
 
-unsafe impl<'a> StackingAnchor<TcpOptions<'a>> for TcpOptions<'a> {}
-unsafe impl<'a, U: Protocol> StackingAnchor<TcpOptions<'a>> for Stacked<U, TcpOptions<'a>> {}
+unsafe impl StackingAnchor<TcpOptions> for TcpOptions {}
+unsafe impl<U: Protocol> StackingAnchor<TcpOptions> for Stacked<U, TcpOptions> {}
 
-impl<'a, U: StackingAnchor<Tcp>> Stack<U> for TcpOptions<'a> {
+impl<U: StackingAnchor<Tcp>> Stack<U> for TcpOptions {
     type Output = Stacked<U, Self>;
 
     #[inline]
@@ -424,7 +409,7 @@ impl<'a, U: StackingAnchor<Tcp>> Stack<U> for TcpOptions<'a> {
     }
 }
 
-impl<'a, L: Stack<TcpOptions<'a>>> core::ops::Div<L> for TcpOptions<'a> {
+impl<L: Stack<TcpOptions>> core::ops::Div<L> for TcpOptions {
     type Output = L::Output;
 
     #[inline]
@@ -433,24 +418,28 @@ impl<'a, L: Stack<TcpOptions<'a>>> core::ops::Div<L> for TcpOptions<'a> {
     }
 }
 
-unsafe impl<'a> Protocol for TcpOptions<'a> {
+unsafe impl Protocol for TcpOptions {
     #[inline]
     fn write_len(&self) -> usize {
-        self.0.len()
+        if self.size == 0 {
+            // No TCP options.
+            0
+        } else {
+            self.size + TCP_LENEOL
+        }
     }
 
     #[inline]
     unsafe fn write_stage1(&self, mem: core::ptr::NonNull<u8>) {
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                self.0.as_ptr(),
-                mem.as_ptr().cast::<u8>(),
-                self.0.len(),
-            );
+        if self.size == 0 {
+            // No TCP options.
+            return;
         }
 
-        if self.0.is_empty() {
-            return;
+        let options_size = self.write_len();
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.options.as_ptr(), mem.as_ptr(), options_size);
         }
 
         let header_size = core::mem::size_of::<Tcp>();
@@ -460,7 +449,7 @@ unsafe impl<'a> Protocol for TcpOptions<'a> {
         // the caller must guarantee that we have exclusive access to the whole packet thus, the
         // pointer dereference is valid.
         let tcp = unsafe { mem.sub(header_size).cast::<Tcp>().as_mut() };
-        tcp.set_header_size(self.0.len() as u8 + header_size as u8);
+        tcp.set_header_size(options_size as u8 + header_size as u8);
     }
 
     #[inline]

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["TcpOption","TcpOptionErr"],"struct":["Tcp","TcpFlags","TcpOptions","TcpOptionsIter","Udp"]};
+window.SIDEBAR_ITEMS = {"enum":["TcpOption","TcpOptionErr"],"struct":["SeqNumber","Tcp","TcpFlags","TcpOptions","TcpOptionsIter","Udp"]};

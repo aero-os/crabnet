@@ -1,4 +1,6 @@
 # `crabnet`
+![ci](https://github.com/aero-os/crabnet/actions/workflows/rust.yml/badge.svg)
+
 Rust library for creating and parsing network packets. 
 
 ## Features

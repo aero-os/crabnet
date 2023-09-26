@@ -1,0 +1,3 @@
+(function() {var implementors = {
+"crabnet":[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/cmp/trait.Ord.html\" title=\"trait core::cmp::Ord\">Ord</a> for <a class=\"struct\" href=\"crabnet/data_link/struct.MacAddr.html\" title=\"struct crabnet::data_link::MacAddr\">MacAddr</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/cmp/trait.Ord.html\" title=\"trait core::cmp::Ord\">Ord</a> for <a class=\"struct\" href=\"crabnet/network/struct.Ipv4Addr.html\" title=\"struct crabnet::network::Ipv4Addr\">Ipv4Addr</a>"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

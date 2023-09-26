@@ -29,9 +29,11 @@ jobs:
     - name: Run tests for `crabnet_tcp`
       run: cargo test --verbose --manifest-path crabnet_tcp/Cargo.toml
     - name: Build documentation for `crabnet`
-      run: cargo doc
+      run: |
+        cargo doc
+        echo "<meta http-equiv=\"refresh\" content=\"0; url=crabnet\">" > ./target/doc/index.html
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./target/doc/crabnet
+        publish_dir: ./target/doc

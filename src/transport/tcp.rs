@@ -1,9 +1,72 @@
+use core::{cmp, ops};
+
 use bit_field::BitField;
 use byte_endian::BigEndian;
 use static_assertions::const_assert_eq;
 
 use crate::network::Ipv4;
 use crate::{Parsable, Parsed, PointerExtension, Protocol, Stack, Stacked, StackingAnchor};
+
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
+#[repr(transparent)]
+pub struct SeqNumber(u32);
+
+impl From<SeqNumber> for u32 {
+    #[inline]
+    fn from(item: SeqNumber) -> u32 {
+        item.0
+    }
+}
+
+impl From<u32> for SeqNumber {
+    #[inline]
+    fn from(item: u32) -> Self {
+        Self(item)
+    }
+}
+
+// Arithmetic operations for [`SeqNumber`].
+impl ops::Add<SeqNumber> for SeqNumber {
+    type Output = SeqNumber;
+
+    #[inline]
+    fn add(self, other: SeqNumber) -> SeqNumber {
+        (self.0.wrapping_add(other.0)).into()
+    }
+}
+
+impl ops::Add<u32> for SeqNumber {
+    type Output = SeqNumber;
+
+    #[inline]
+    fn add(self, other: u32) -> SeqNumber {
+        self + SeqNumber::from(other)
+    }
+}
+
+impl ops::Sub<SeqNumber> for SeqNumber {
+    type Output = SeqNumber;
+
+    #[inline]
+    fn sub(self, other: SeqNumber) -> SeqNumber {
+        (self.0.wrapping_sub(other.0)).into()
+    }
+}
+
+impl ops::Sub<u32> for SeqNumber {
+    type Output = SeqNumber;
+
+    #[inline]
+    fn sub(self, other: u32) -> SeqNumber {
+        self - SeqNumber::from(other)
+    }
+}
+
+impl cmp::PartialOrd for SeqNumber {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        (self.0.wrapping_sub(other.0) as i32).partial_cmp(&0)
+    }
+}
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,12 +123,14 @@ impl Tcp {
     }
 
     #[inline]
-    pub fn sequence_number(&self) -> u32 {
-        self.seq_nr.to_native()
+    pub fn sequence_number(&self) -> SeqNumber {
+        SeqNumber::from(self.seq_nr.to_native())
     }
 
     #[inline]
-    pub fn set_sequence_number(mut self, value: u32) -> Self {
+    pub fn set_sequence_number(mut self, value: SeqNumber) -> Self {
+        let value: u32 = value.into();
+
         self.seq_nr = value.into();
         self
     }
@@ -97,13 +162,15 @@ impl Tcp {
     }
 
     #[inline]
-    pub fn ack_number(&self) -> u32 {
-        self.ack_nr.to_native()
+    pub fn ack_number(&self) -> SeqNumber {
+        SeqNumber::from(self.ack_nr.to_native())
     }
 
     /// Sets the ACK number to `value`.
     #[inline]
-    pub fn set_ack_number(mut self, value: u32) -> Self {
+    pub fn set_ack_number(mut self, value: SeqNumber) -> Self {
+        let value: u32 = value.into();
+
         self.ack_nr = value.into();
         self
     }
@@ -454,4 +521,36 @@ unsafe impl Protocol for TcpOptions {
 
     #[inline]
     unsafe fn write_stage2(&self, _mem: core::ptr::NonNull<u8>, _payload_len: usize) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrapping_seq_nr() {
+        let x = SeqNumber::from(0);
+        let y = SeqNumber::from(1);
+        let z = SeqNumber::from(u32::MAX);
+
+        let wrapped = z + y;
+        assert_ne!(x, z);
+        assert_eq!(wrapped, x);
+
+        let middle = SeqNumber::from(2u32.pow(31));
+
+        let current = SeqNumber::from(0);
+        let next = current + 1;
+
+        assert!(current < next);
+        assert!(current < current + middle);
+        assert!(current > next + middle);
+
+        let current = SeqNumber::from(u32::MAX);
+        let next = current + 1;
+
+        assert!(current < next);
+        assert!(current < current + middle);
+        assert!(current > next + middle);
+    }
 }

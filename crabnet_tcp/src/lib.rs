@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use core::time::Duration;
 
 use crabnet::network::{Ipv4, Ipv4Addr, Ipv4Type};
-use crabnet::transport::{Tcp, TcpFlags, TcpOption, TcpOptions};
+use crabnet::transport::{SeqNumber, Tcp, TcpFlags, TcpOption, TcpOptions};
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]
 pub enum State {
@@ -60,19 +60,19 @@ pub enum State {
 #[derive(Default, Debug)]
 pub struct SendSequenceSpace {
     /// Send unacknowledged.
-    pub una: u32,
+    pub una: SeqNumber,
     /// Send next.
-    pub nxt: u32,
+    pub nxt: SeqNumber,
     /// Send window.
     pub wnd: u16,
     /// Send urgent pointer.
     pub up: bool,
     /// Segment sequence number used for last window update.
-    pub wl1: u32,
+    pub wl1: SeqNumber,
     /// Segment acknowledgment number used for last window update.
-    pub wl2: u32,
+    pub wl2: SeqNumber,
     /// Initial send sequence number.
-    pub iss: u32,
+    pub iss: SeqNumber,
 }
 
 /// State of the Receive Sequence Space (RFC 793 S3.2 F5)
@@ -90,13 +90,13 @@ pub struct SendSequenceSpace {
 #[derive(Default, Debug)]
 pub struct RecvSequenceSpace {
     /// Receive next.
-    pub nxt: u32,
+    pub nxt: SeqNumber,
     /// Receive window.
     pub wnd: u16,
     /// Receive urgent pointer.
     pub up: bool,
     /// Initial receive sequence number.
-    pub irs: u32,
+    pub irs: SeqNumber,
 }
 
 #[derive(Debug)]
@@ -173,12 +173,12 @@ impl<D: NetworkDevice> Socket<D> {
         socket
     }
 
-    pub fn send_raw(&mut self, seq_number: u32, flags: TcpFlags, payload: &[u8]) {
-        let mut next_seq = seq_number.wrapping_add(payload.len() as u32);
+    pub fn send_raw(&mut self, seq_number: SeqNumber, flags: TcpFlags, payload: &[u8]) {
+        let mut next_seq = seq_number + SeqNumber::from(payload.len() as u32);
         let mut options = TcpOptions::new();
 
         if flags.contains(TcpFlags::SYN) {
-            next_seq = next_seq.wrapping_add(1);
+            next_seq = next_seq + 1;
 
             // FIXME(andypython): This should be device.mss()
             options = options
@@ -187,7 +187,7 @@ impl<D: NetworkDevice> Socket<D> {
         }
 
         if flags.contains(TcpFlags::FIN) {
-            next_seq = next_seq.wrapping_add(1);
+            next_seq = next_seq + 1;
         }
 
         let ip = Ipv4::new(self.device.ip(), self.addr.dest_ip, Ipv4Type::Tcp);
@@ -197,12 +197,13 @@ impl<D: NetworkDevice> Socket<D> {
             .set_sequence_number(seq_number)
             .set_ack_number(self.recv.nxt);
 
-        if wrapping_lt(self.send.nxt, next_seq) {
+        if self.send.nxt < next_seq {
             self.send.nxt = next_seq;
         }
 
         let retransmit_duration = Duration::from_millis(100);
-        let retransmit_handle = RetransmitHandle::new(seq_number, retransmit_duration);
+        // FIXME: use the [`SeqNumber`] type for the retransmit handle.
+        let retransmit_handle = RetransmitHandle::new(seq_number.into(), retransmit_duration);
 
         self.device.send(
             Packet {
@@ -216,7 +217,7 @@ impl<D: NetworkDevice> Socket<D> {
     }
 
     #[inline]
-    pub fn send_with_flags(&mut self, seq_number: u32, flags: TcpFlags) {
+    pub fn send_with_flags(&mut self, seq_number: SeqNumber, flags: TcpFlags) {
         self.send_raw(seq_number, flags, &[])
     }
 
@@ -352,13 +353,13 @@ impl<D: NetworkDevice> Socket<D> {
 
                 // Keep track of the sender info.
                 self.recv.irs = tcp.sequence_number();
-                self.recv.nxt = tcp.sequence_number().wrapping_add(1);
+                self.recv.nxt = tcp.sequence_number() + 1;
                 self.recv.wnd = tcp.window();
 
                 // Initialize send sequence space.
-                self.send.iss = 0;
-                self.send.nxt = self.send.iss.wrapping_add(1);
-                self.send.una = 0;
+                self.send.iss = SeqNumber::from(0);
+                self.send.nxt = self.send.iss + 1;
+                self.send.una = SeqNumber::from(0);
                 self.send.wnd = u16::MAX;
 
                 // Send SYN-ACK.
@@ -370,9 +371,7 @@ impl<D: NetworkDevice> Socket<D> {
                 let ack_number = tcp.ack_number();
 
                 if flags.contains(TcpFlags::ACK) {
-                    if wrapping_lt(ack_number.wrapping_sub(1), self.send.iss)
-                        || wrapping_gt(ack_number, self.send.nxt)
-                    {
+                    if ack_number <= self.send.iss || ack_number > self.send.nxt {
                         if flags.contains(TcpFlags::RST) {
                             // Drop the segment and return.
                             return;
@@ -383,11 +382,7 @@ impl<D: NetworkDevice> Socket<D> {
                         return;
                     }
 
-                    acceptable = is_between_wrapped(
-                        self.send.una.wrapping_sub(1),
-                        ack_number,
-                        self.send.nxt.wrapping_add(1),
-                    );
+                    acceptable = (self.send.una <= ack_number) && (ack_number <= self.send.nxt);
                 }
 
                 if flags.contains(TcpFlags::RST) {
@@ -401,14 +396,14 @@ impl<D: NetworkDevice> Socket<D> {
                 }
 
                 if flags.contains(TcpFlags::ACK | TcpFlags::SYN) {
-                    self.recv.nxt = tcp.sequence_number().wrapping_add(1);
+                    self.recv.nxt = tcp.sequence_number() + 1;
                     self.recv.irs = tcp.sequence_number();
 
                     if acceptable {
                         self.send.una = tcp.ack_number();
                     }
 
-                    if wrapping_gt(self.send.una, self.send.iss) {
+                    if self.send.una > self.send.iss {
                         // TODO(andypython): Parse TCP options.
                         self.send.wnd = tcp.window();
                         self.send.wl1 = tcp.sequence_number();
@@ -433,7 +428,7 @@ impl<D: NetworkDevice> Socket<D> {
         }
 
         // Otherwise, first check the sequence number.
-        let wend = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
+        let wend = self.recv.nxt + self.recv.wnd as u32;
         let seq_number = tcp.sequence_number();
 
         // Valid segment check.
@@ -453,17 +448,13 @@ impl<D: NetworkDevice> Socket<D> {
         // ```
         if (slen == 0)
             && ((self.recv.wnd == 0 && seq_number == self.recv.nxt)
-                || is_between_wrapped(self.recv.nxt.wrapping_sub(1), seq_number, wend))
+                || is_between_wrapped(self.recv.nxt - 1, seq_number, wend))
         {
             acceptable = true;
         } else if self.recv.wnd == 0 {
             acceptable = false;
-        } else if is_between_wrapped(self.recv.nxt.wrapping_sub(1), seq_number, wend)
-            || is_between_wrapped(
-                self.recv.nxt.wrapping_sub(1),
-                seq_number.wrapping_add(slen - 1),
-                wend,
-            )
+        } else if is_between_wrapped(self.recv.nxt - 1, seq_number, wend)
+            || is_between_wrapped(self.recv.nxt - 1, seq_number + (slen - 1), wend)
         {
             acceptable = true;
         };
@@ -524,11 +515,7 @@ impl<D: NetworkDevice> Socket<D> {
 
         match self.state {
             State::SynRecv => {
-                if is_between_wrapped(
-                    self.send.una,
-                    tcp.ack_number(),
-                    self.send.nxt.wrapping_add(1),
-                ) {
+                if is_between_wrapped(self.send.una, tcp.ack_number(), self.send.nxt + 1) {
                     self.send.wnd = tcp.window();
                     self.send.wl1 = tcp.sequence_number();
                     self.send.wl2 = tcp.ack_number();
@@ -547,11 +534,7 @@ impl<D: NetworkDevice> Socket<D> {
             | State::FinWait2
             | State::CloseWait
             | State::Closing => {
-                if is_between_wrapped(
-                    self.send.una.wrapping_sub(1),
-                    tcp.ack_number(),
-                    self.send.nxt.wrapping_add(1),
-                ) {
+                if is_between_wrapped(self.send.una - 1, tcp.ack_number(), self.send.nxt + 1) {
                     self.send.una = tcp.ack_number();
                     // TODO:
                     //     Any segments on the retransmission queue that are thereby entirely
@@ -559,15 +542,15 @@ impl<D: NetworkDevice> Socket<D> {
                     //     for buffers that have been SENT and fully acknowledged (i.e., SEND buffer
                     //     should be returned with "ok" response).
 
-                    if wrapping_lt(self.send.wl1, tcp.sequence_number())
+                    if (self.send.wl1 < tcp.sequence_number())
                         || (self.send.wl1 == tcp.sequence_number()
-                            && wrapping_lt(self.send.wl2.wrapping_sub(1), tcp.ack_number()))
+                            && self.send.wl2 <= tcp.ack_number())
                     {
                         self.send.wnd = tcp.window();
                         self.send.wl1 = tcp.sequence_number();
                         self.send.wl2 = tcp.ack_number();
                     }
-                } else if wrapping_gt(tcp.ack_number(), self.send.nxt) {
+                } else if tcp.ack_number() > self.send.nxt {
                     self.send_with_flags(self.send.nxt, TcpFlags::ACK);
                     return;
                 }
@@ -617,7 +600,7 @@ impl<D: NetworkDevice> Socket<D> {
 
                 // Advance RCV.NXT and adjust RCV.WND as apporopriate to the current buffer
                 // availability.
-                self.recv.nxt = seq_number.wrapping_add(payload.len() as u32);
+                self.recv.nxt = seq_number + payload.len() as u32;
                 self.recv.wnd = u16::MAX;
 
                 self.recv_queue.extend_from_slice(payload);
@@ -657,7 +640,7 @@ impl<D: NetworkDevice> Socket<D> {
                 state => unimplemented!("<FIN> {state:?}"),
             }
 
-            self.recv.nxt = tcp.sequence_number().wrapping_add(1);
+            self.recv.nxt = tcp.sequence_number() + 1;
             self.send_with_flags(self.send.nxt, TcpFlags::ACK);
         }
     }
@@ -669,25 +652,8 @@ impl<D: NetworkDevice> Socket<D> {
 }
 
 #[inline]
-pub const fn wrapping_lt(lhs: u32, rhs: u32) -> bool {
-    // From RFC 1323:
-    //     TCP determines if a data segment is "old" or "new" by testing
-    //     whether its sequence number is within 2**31 bytes of the left edge
-    //     of the window, and if it is not, discarding the data as "old".  To
-    //     insure that new data is never mistakenly considered old and vice-
-    //     versa, the left edge of the sender's window has to be at most
-    //     2**31 away from the right edge of the receiver's window.
-    lhs.wrapping_sub(rhs) > 2 ^ 31
-}
-
-#[inline]
-pub const fn wrapping_gt(lhs: u32, rhs: u32) -> bool {
-    wrapping_lt(rhs, lhs)
-}
-
-#[inline]
-pub const fn is_between_wrapped(start: u32, x: u32, end: u32) -> bool {
-    wrapping_lt(start, x) && wrapping_lt(x, end)
+pub fn is_between_wrapped(start: SeqNumber, x: SeqNumber, end: SeqNumber) -> bool {
+    (start < x) && (x < end)
 }
 
 pub struct RetransmitHandle {

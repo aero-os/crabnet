@@ -443,7 +443,7 @@ unsafe impl Parsable<'_> for TcpOptions {
         let options_size = tcp.options_size() as usize;
 
         // TODO: Invalid header, return an error.
-        assert!(options_size <= size && size <= 40);
+        assert!(options_size <= size && options_size <= 40);
 
         let mut options = [0; 40];
 

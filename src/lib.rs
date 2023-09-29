@@ -272,8 +272,10 @@ impl<'a> PacketParser<'a> {
     where
         U: Protocol + StackingAnchor<U> + Parsable<'a> + 'a,
     {
-        let mem = &self.payload[self.cursor..];
-        let parsed = U::parse(mem.as_ptr(), mem.len());
+        let size = self.payload.len() - self.cursor;
+        let ptr = unsafe { self.payload.as_ptr().add(self.cursor) };
+
+        let parsed = U::parse(ptr, size);
         self.cursor += parsed.size;
         parsed.value
     }

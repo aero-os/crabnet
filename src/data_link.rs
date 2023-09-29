@@ -226,3 +226,16 @@ impl<U: Protocol> Stack<U> for Arp {
 crate::impl_stack!(@make Arp {
     fn write_stage2(&self, _mem: NonNull<u8>, _payload_len: usize) {}
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use alloc::string::ToString;
+
+    #[test]
+    fn mac_addr_fmt() {
+        let mac = MacAddr([0x00, 0x01, 0x02, 0x03, 0x04, 0x05]);
+        assert_eq!(mac.to_string(), "00:01:02:03:04:05");
+    }
+}

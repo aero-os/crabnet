@@ -1,3 +1,5 @@
+use core::fmt;
+
 use byte_endian::BigEndian;
 use static_assertions::const_assert_eq;
 
@@ -28,6 +30,13 @@ impl Ipv4Addr {
 impl From<[u8; Ipv4Addr::ADDR_SIZE]> for Ipv4Addr {
     fn from(value: [u8; Ipv4Addr::ADDR_SIZE]) -> Self {
         Self(value)
+    }
+}
+
+impl fmt::Display for Ipv4Addr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])?;
+        Ok(())
     }
 }
 
@@ -110,3 +119,15 @@ crate::impl_stack!(@make Ipv4 {
         ipv4.checksum = checksum::make(checksum::calculate(ipv4));
     }
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use alloc::string::ToString;
+
+    #[test]
+    fn ipv4_addr_fmt() {
+        assert_eq!(Ipv4Addr::new([127, 0, 0, 1]).to_string(), "127.0.0.1");
+    }
+}

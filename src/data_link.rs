@@ -1,3 +1,5 @@
+use core::fmt;
+
 use byte_endian::BigEndian;
 use static_assertions::const_assert_eq;
 
@@ -12,6 +14,16 @@ impl MacAddr {
     pub const ADDR_SIZE: usize = 6;
     pub const BROADCAST: Self = Self([0xff; Self::ADDR_SIZE]);
     pub const NULL: Self = Self([0; Self::ADDR_SIZE]);
+}
+
+impl fmt::Display for MacAddr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5]
+        )
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]

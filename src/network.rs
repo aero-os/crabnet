@@ -22,13 +22,26 @@ impl Ipv4Addr {
     // Consider removing it to avoid misuse/confusion.
     pub const NULL: Self = Self([0; Self::ADDR_SIZE]);
 
-    pub fn new(a: u8, b: u8, c: u8, d: u8) -> Self {
+    /// Creates a new IPv4 address from four eight-bit octets.
+    ///
+    /// The result will represent the IP address `a`.`b`.`c`.`d`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crabnet::network::Ipv4Addr;
+    ///
+    /// let addr = Ipv4Addr::new(127, 0, 0, 1);
+    /// ```
+    #[inline]
+    pub const fn new(a: u8, b: u8, c: u8, d: u8) -> Self {
         Self([a, b, c, d])
     }
 
     /// Returns `true` if `self` and `other` belong to the same subnet.
     ///
     /// ## Example
+    ///
     /// ```rust
     /// use crabnet::network::Ipv4Addr;
     ///
@@ -42,7 +55,7 @@ impl Ipv4Addr {
     /// assert_eq!(x.is_same_subnet(z, subnet_mask), false);
     /// assert_eq!(y.is_same_subnet(z, subnet_mask), false);
     /// ```
-    pub fn is_same_subnet(&self, other: Ipv4Addr, subnet_mask: Ipv4Addr) -> bool {
+    pub const fn is_same_subnet(&self, other: Ipv4Addr, subnet_mask: Ipv4Addr) -> bool {
         let subnet = u32::from_be_bytes(subnet_mask.octets());
 
         let x = u32::from_be_bytes(other.octets());
@@ -54,13 +67,15 @@ impl Ipv4Addr {
     /// Returns the four eight-bit integers that make up this address.
     ///
     /// ## Examples
+    ///
     /// ```rust
     /// use crabnet::network::Ipv4Addr;
     ///
     /// let addr = Ipv4Addr::new(192, 168, 1, 1);
     /// assert_eq!(addr.octets(), [192, 168, 1, 1]);
+    /// ```
     #[inline]
-    pub fn octets(&self) -> [u8; Self::ADDR_SIZE] {
+    pub const fn octets(&self) -> [u8; Self::ADDR_SIZE] {
         self.0
     }
 }

@@ -59,7 +59,7 @@ impl Tun {
 impl NetworkDevice for Tun {
     fn ip(&self) -> Ipv4Addr {
         // The IP is set in the run.sh script.
-        Ipv4Addr::new([192, 168, 0, 2])
+        Ipv4Addr::new(192, 168, 0, 2)
     }
 
     fn send(&self, packet: Packet, handle: RetransmitHandle) {
@@ -332,8 +332,8 @@ mod test {
         // spwan_timer(n1.clone());
         // spwan_timer(n2.clone());
 
-        let a1 = Address::new(1234, 5678, Ipv4Addr::new([192, 168, 0, 1]));
-        let a2 = Address::new(5678, 1234, Ipv4Addr::new([192, 168, 0, 2]));
+        let a1 = Address::new(1234, 5678, Ipv4Addr::new(192, 168, 0, 1));
+        let a2 = Address::new(5678, 1234, Ipv4Addr::new(192, 168, 0, 2));
 
         (
             SocketShim::new(TcpSocket::new(n1, a1)),

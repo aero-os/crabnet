@@ -22,8 +22,8 @@ impl Ipv4Addr {
     // Consider removing it to avoid misuse/confusion.
     pub const NULL: Self = Self([0; Self::ADDR_SIZE]);
 
-    pub fn new(addr: [u8; Self::ADDR_SIZE]) -> Self {
-        Self(addr)
+    pub fn new(a: u8, b: u8, c: u8, d: u8) -> Self {
+        Self([a, b, c, d])
     }
 
     /// Returns `true` if `self` and `other` belong to the same subnet.
@@ -32,11 +32,11 @@ impl Ipv4Addr {
     /// ```rust
     /// use crabnet::network::Ipv4Addr;
     ///
-    /// let subnet_mask = Ipv4Addr::new([255, 255, 255, 0]);
+    /// let subnet_mask = Ipv4Addr::new(255, 255, 255, 0);
     ///
-    /// let x = Ipv4Addr::new([192, 168, 1, 1]);
-    /// let y = Ipv4Addr::new([192, 168, 1, 2]);
-    /// let z = Ipv4Addr::new([192, 168, 2, 1]);
+    /// let x = Ipv4Addr::new(192, 168, 1, 1);
+    /// let y = Ipv4Addr::new(192, 168, 1, 2);
+    /// let z = Ipv4Addr::new(192, 168, 2, 1);
     ///
     /// assert_eq!(x.is_same_subnet(y, subnet_mask), true);
     /// assert_eq!(x.is_same_subnet(z, subnet_mask), false);
@@ -57,7 +57,7 @@ impl Ipv4Addr {
     /// ```rust
     /// use crabnet::network::Ipv4Addr;
     ///
-    /// let addr = Ipv4Addr::new([192, 168, 1, 1]);
+    /// let addr = Ipv4Addr::new(192, 168, 1, 1);
     /// assert_eq!(addr.octets(), [192, 168, 1, 1]);
     #[inline]
     pub fn octets(&self) -> [u8; Self::ADDR_SIZE] {
@@ -166,6 +166,6 @@ mod tests {
 
     #[test]
     fn ipv4_addr_fmt() {
-        assert_eq!(Ipv4Addr::new([127, 0, 0, 1]).to_string(), "127.0.0.1");
+        assert_eq!(Ipv4Addr::new(127, 0, 0, 1).to_string(), "127.0.0.1");
     }
 }

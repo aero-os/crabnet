@@ -14,7 +14,14 @@ impl Ipv4Addr {
     ///
     /// [RFC 8200 § 2]: https://www.rfc-editor.org/rfc/rfc791#section-3.2
     pub const ADDR_SIZE: usize = 4;
-    /// Broadcast address.
+    /// An IPv4 address representing the broadcast address: `255.255.255.255`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crabnet::network::Ipv4Addr;
+    /// assert_eq!(Ipv4Addr::BROADCAST, Ipv4Addr::new(255, 255, 255, 255));
+    /// ```
     pub const BROADCAST: Self = Self([0xff; Self::ADDR_SIZE]);
     /// Loopback address.
     pub const LOOPBACK: Self = Self([127, 0, 0, 1]);
@@ -33,9 +40,31 @@ impl Ipv4Addr {
     ///
     /// let addr = Ipv4Addr::new(127, 0, 0, 1);
     /// ```
+    #[must_use]
     #[inline]
     pub const fn new(a: u8, b: u8, c: u8, d: u8) -> Self {
         Self([a, b, c, d])
+    }
+
+    /// Returns [`true`] if this is a broadcast address (`255.255.255.255`).
+    ///
+    /// A broadcast address has all octets set to `255` as defined in [IETF RFC 919].
+    ///
+    /// [IETF RFC 919]: https://tools.ietf.org/html/rfc919
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    ///
+    /// assert_eq!(Ipv4Addr::new(255, 255, 255, 255).is_broadcast(), true);
+    /// assert_eq!(Ipv4Addr::new(236, 168, 10, 65).is_broadcast(), false);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub const fn is_broadcast(&self) -> bool {
+        // FIXME: Equality check `self.0 == self.BROADCAST.0` does not work in const contexts.
+        u32::from_be_bytes(self.octets()) == u32::from_be_bytes(Self::BROADCAST.octets())
     }
 
     /// Returns `true` if `self` and `other` belong to the same subnet.
@@ -55,6 +84,7 @@ impl Ipv4Addr {
     /// assert_eq!(x.is_same_subnet(z, subnet_mask), false);
     /// assert_eq!(y.is_same_subnet(z, subnet_mask), false);
     /// ```
+    #[must_use]
     pub const fn is_same_subnet(&self, other: Ipv4Addr, subnet_mask: Ipv4Addr) -> bool {
         let subnet = u32::from_be_bytes(subnet_mask.octets());
 
@@ -74,6 +104,7 @@ impl Ipv4Addr {
     /// let addr = Ipv4Addr::new(192, 168, 1, 1);
     /// assert_eq!(addr.octets(), [192, 168, 1, 1]);
     /// ```
+    #[must_use]
     #[inline]
     pub const fn octets(&self) -> [u8; Self::ADDR_SIZE] {
         self.0

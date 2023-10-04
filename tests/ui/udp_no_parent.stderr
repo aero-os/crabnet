@@ -26,7 +26,7 @@ error[E0599]: the method `into_boxed_bytes` exists for struct `Udp`, but its tra
 9 |     let p = x.into_boxed_bytes();
   |               ^^^^^^^^^^^^^^^^ method cannot be called on `Udp` due to unsatisfied trait bounds
   |
- ::: src/transport/mod.rs
+ ::: src/transport/udp.rs
   |
   | pub struct Udp {
   | --------------

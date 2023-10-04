@@ -25,6 +25,44 @@ impl Ipv4Addr {
     pub fn new(addr: [u8; Self::ADDR_SIZE]) -> Self {
         Self(addr)
     }
+
+    /// Returns `true` if `self` and `other` belong to the same subnet.
+    ///
+    /// ## Example
+    /// ```rust
+    /// use crabnet::network::Ipv4Addr;
+    ///
+    /// let subnet_mask = Ipv4Addr::new([255, 255, 255, 0]);
+    ///
+    /// let x = Ipv4Addr::new([192, 168, 1, 1]);
+    /// let y = Ipv4Addr::new([192, 168, 1, 2]);
+    /// let z = Ipv4Addr::new([192, 168, 2, 1]);
+    ///
+    /// assert_eq!(x.is_same_subnet(y, subnet_mask), true);
+    /// assert_eq!(x.is_same_subnet(z, subnet_mask), false);
+    /// assert_eq!(y.is_same_subnet(z, subnet_mask), false);
+    /// ```
+    pub fn is_same_subnet(&self, other: Ipv4Addr, subnet_mask: Ipv4Addr) -> bool {
+        let subnet = u32::from_be_bytes(subnet_mask.octets());
+
+        let x = u32::from_be_bytes(other.octets());
+        let y = u32::from_be_bytes(self.octets());
+
+        (x & subnet) == (y & subnet)
+    }
+
+    /// Returns the four eight-bit integers that make up this address.
+    ///
+    /// ## Examples
+    /// ```rust
+    /// use crabnet::network::Ipv4Addr;
+    ///
+    /// let addr = Ipv4Addr::new([192, 168, 1, 1]);
+    /// assert_eq!(addr.octets(), [192, 168, 1, 1]);
+    #[inline]
+    pub fn octets(&self) -> [u8; Self::ADDR_SIZE] {
+        self.0
+    }
 }
 
 impl From<[u8; Ipv4Addr::ADDR_SIZE]> for Ipv4Addr {

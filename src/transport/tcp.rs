@@ -72,12 +72,22 @@ bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     #[repr(transparent)]
     pub struct TcpFlags: u16 {
+        /// No more data from sender.
         const FIN = 1 << 0;
+        /// Synchronize sequence numbers.
         const SYN = 1 << 1;
+        /// Reset the connection.
         const RST = 1 << 2;
+        /// Push Function.
         const PSH = 1 << 3;
+        /// Acknowledgment field is significant.
         const ACK = 1 << 4;
+        /// Urgent pointer field is significant.
         const URG = 1 << 5;
+        /// ECN-Echo.
+        const ECE = 1 << 6;
+        /// Congestion Window Reduced.
+        const CWR = 1 << 7;
     }
 }
 

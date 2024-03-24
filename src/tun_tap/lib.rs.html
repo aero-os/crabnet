@@ -1,4 +1,6 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `/home/runner/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tun-tap-0.1.4/src/lib.rs`."><title>lib.rs - source</title><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceSerif4-Bold-a2c9cd1067f8b328.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2"><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-fa3bb1812debf86c.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tun_tap" data-themes="" data-resource-suffix="" data-rustdoc-version="1.75.0-nightly (960754090 2023-10-06)" data-channel="nightly" data-search-js="search-5f5ec5419eadd0c9.js" data-settings-js="settings-74424d7eec62a23e.js" ><script src="../../static.files/storage-fec3eaa3851e447d.js"></script><script defer src="../../static.files/src-script-3280b574d94e47b4.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-c5bd66d33317d69f.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-5d8b3c7633ad77ba.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"></nav><main><nav class="sub"><a class="sub-logo-container" href="../../tun_tap/index.html"><img class="rust-logo" src="../../static.files/rust-logo-151179464ae7ed46.svg" alt="logo"></a><form class="search-form"><span></span><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"><div id="help-button" title="help" tabindex="-1"><a href="../../help.html">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../settings.html" title="settings"><img width="22" height="22" alt="Change settings" src="../../static.files/wheel-7b819b6101059cd0.svg"></a></div></form></nav><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `/home/runner/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tun-tap-0.1.4/src/lib.rs`."><title>lib.rs - source</title><script> if (window.location.protocol !== "file:") document.write(`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2">`)</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-e935ef01ae1c1829.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tun_tap" data-themes="" data-resource-suffix="" data-rustdoc-version="1.79.0-nightly (2f090c30d 2024-03-23)" data-channel="nightly" data-search-js="search-42d8da7a6b9792c2.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-4c98445ec4002617.js"></script><script defer src="../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-12cf3b4f4f9dc36d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-04d5337699b92874.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title">
+            <h2>Files</h2></div></nav><div class="sidebar-resizer"></div>
+    <main><nav class="sub"><form class="search-form"><span></span><div id="sidebar-button" tabindex="-1"><a href="../../tun_tap/all.html" title="show sidebar"></a></div><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"><div id="help-button" tabindex="-1"><a href="../../help.html" title="help">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../settings.html" title="settings"><img width="22" height="22" alt="Change settings" src="../../static.files/wheel-7b819b6101059cd0.svg"></a></div></form></nav><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -251,7 +253,7 @@
 <a href="#251" id="251">251</a>
 <a href="#252" id="252">252</a>
 </pre></div><pre class="rust"><code><span class="attr">#![doc(
-    html_root_url = <span class="string">&quot;https://docs.rs/tun-tap/0.1.4/tun-tap/&quot;</span>,
+    html_root_url = <span class="string">"https://docs.rs/tun-tap/0.1.4/tun-tap/"</span>,
     test(attr(deny(warnings), allow(unused_variables)))
 )]
 #![deny(missing_docs)]
@@ -270,12 +272,12 @@
 //!
 //! # Known issues
 //!
-//! * It is tested only on Linux and probably doesn&#39;t work anywhere else, even though other systems
+//! * It is tested only on Linux and probably doesn't work anywhere else, even though other systems
 //!   have some TUN/TAP support. Reports that it works (or not) and pull request to add other
-//!   sustem&#39;s support are welcome.
+//!   sustem's support are welcome.
 //! * The [`Async`](async/struct.Async.html) interface is very minimal and will require extention
 //!   for further use cases and better performance.
-//! * This doesn&#39;t support advanced usage patters, like reusing already created device or creating
+//! * This doesn't support advanced usage patters, like reusing already created device or creating
 //!   persistent devices. Again, pull requests are welcome.
 //! * There are no automated tests. Any idea how to test this in a reasonable way?
 
@@ -285,10 +287,10 @@
 <span class="kw">use </span>std::os::raw::{c_char, c_int};
 <span class="kw">use </span>std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 
-<span class="attr">#[cfg(feature = <span class="string">&quot;tokio&quot;</span>)]
+<span class="attr">#[cfg(feature = <span class="string">"tokio"</span>)]
 </span><span class="kw">pub mod async</span>;
 
-<span class="kw">extern </span><span class="string">&quot;C&quot; </span>{
+<span class="kw">extern </span><span class="string">"C" </span>{
     <span class="kw">fn </span>tuntap_setup(fd: c_int, name: <span class="kw-2">*mut </span>u8, mode: c_int, packet_info: c_int) -&gt; c_int;
 }
 
@@ -325,7 +327,7 @@
     ///
     /// * `ifname`: The requested name of the virtual device. If left empty, the kernel will
     ///   provide some reasonable, currently unused name. It also can contain `%d`, which will be
-    ///   replaced by a number to ensure the name is unused. Even if it isn&#39;t empty or doesn&#39;t
+    ///   replaced by a number to ensure the name is unused. Even if it isn't empty or doesn't
     ///   contain `%d`, the actual name may be different (for example truncated to OS-dependent
     ///   length). Use [`name`](#method.name) to find out the real name.
     /// * `mode`: In which mode to create the device.
@@ -335,13 +337,13 @@
     /// This may fail for various OS-dependent reasons. However, two most common are:
     ///
     /// * The name is already taken.
-    /// * The process doesn&#39;t have the needed privileges (eg. `CAP_NETADM`).
+    /// * The process doesn't have the needed privileges (eg. `CAP_NETADM`).
     ///
     /// # Examples
     ///
     /// ```rust,no_run
     /// # use tun_tap::*;
-    /// let iface = Iface::new(&quot;mytun&quot;, Mode::Tun).expect(&quot;Failed to create a TUN device&quot;);
+    /// let iface = Iface::new("mytun", Mode::Tun).expect("Failed to create a TUN device");
     /// let name = iface.name();
     /// // Configure the device ‒ set IP address on it, bring it up.
     /// let mut buffer = vec![0; 1504]; // MTU + 4 for the header
@@ -356,7 +358,7 @@
     ///
     /// * `ifname`: The requested name of the virtual device. If left empty, the kernel will
     ///   provide some reasonable, currently unused name. It also can contain `%d`, which will be
-    ///   replaced by a number to ensure the name is unused. Even if it isn&#39;t empty or doesn&#39;t
+    ///   replaced by a number to ensure the name is unused. Even if it isn't empty or doesn't
     ///   contain `%d`, the actual name may be different (for example truncated to OS-dependent
     ///   length). Use [`name`](#method.name) to find out the real name.
     /// * `mode`: In which mode to create the device.
@@ -366,13 +368,13 @@
     /// This may fail for various OS-dependent reasons. However, two most common are:
     ///
     /// * The name is already taken.
-    /// * The process doesn&#39;t have the needed privileges (eg. `CAP_NETADM`).
+    /// * The process doesn't have the needed privileges (eg. `CAP_NETADM`).
     ///
     /// # Examples
     ///
     /// ```rust,no_run
     /// # use tun_tap::*;
-    /// let iface = Iface::without_packet_info(&quot;mytap&quot;, Mode::Tap).expect(&quot;Failed to create a TAP device&quot;);
+    /// let iface = Iface::without_packet_info("mytap", Mode::Tap).expect("Failed to create a TAP device");
     /// let name = iface.name();
     /// // Configure the device ‒ set IP address on it, bring it up.
     /// let mut buffer = vec![0; 1500]; // MTU
@@ -386,7 +388,7 @@
         <span class="kw">let </span>fd = OpenOptions::new()
             .read(<span class="bool-val">true</span>)
             .write(<span class="bool-val">true</span>)
-            .open(<span class="string">&quot;/dev/net/tun&quot;</span>)<span class="question-mark">?</span>;
+            .open(<span class="string">"/dev/net/tun"</span>)<span class="question-mark">?</span>;
         <span class="comment">// The buffer is larger than needed, but who cares… it is large enough.
         </span><span class="kw">let </span><span class="kw-2">mut </span>name_buffer = Vec::new();
         name_buffer.extend_from_slice(ifname.as_bytes());
@@ -434,7 +436,7 @@
     ///
     /// Make sure the buffer is large enough. It is MTU of the interface (usually 1500, unless
     /// reconfigured) + 4 for the header in case that packet info is prepended, MTU + size of ethernet frame (38 bytes,
-    /// unless VLan tags are enabled). If the buffer isn&#39;t large enough, the packet gets truncated.
+    /// unless VLan tags are enabled). If the buffer isn't large enough, the packet gets truncated.
     ///
     /// # Result
     ///
@@ -461,7 +463,7 @@
     /// # Notes
     ///
     /// The TUN/TAP is a network adapter. Therefore, many errors are handled simply by dropping
-    /// packets. If you pass an invalid packet, it&#39;ll likely suceed in sending it, but will be
+    /// packets. If you pass an invalid packet, it'll likely suceed in sending it, but will be
     /// dropped somewhere in kernel due to failed validation. If you send packets too fast, they
     /// are likely to get dropped too. If you send a packet for address that is not assigned to any
     /// interface and not routed anywhere… you get the idea.
@@ -474,11 +476,11 @@
     ///
     /// # Errors
     ///
-    /// This fails with an error in case of low-level OS errors (they shouldn&#39;t usually happen).
+    /// This fails with an error in case of low-level OS errors (they shouldn't usually happen).
     ///
     /// # Notes
-    /// If default features are excluded, include feature &quot;libc&quot; for this function to be available
-    </span><span class="attr">#[cfg(feature = <span class="string">&quot;libc&quot;</span>)]
+    /// If default features are excluded, include feature "libc" for this function to be available
+    </span><span class="attr">#[cfg(feature = <span class="string">"libc"</span>)]
     </span><span class="kw">pub fn </span>set_non_blocking(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>fd = <span class="self">self</span>.as_raw_fd();
         <span class="kw">let </span><span class="kw-2">mut </span>nonblock: c_int = <span class="number">1</span>;

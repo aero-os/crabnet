@@ -7,10 +7,7 @@ error[E0599]: the method `into_boxed_bytes` exists for struct `Stacked<Udp, [u8;
  ::: src/lib.rs
   |
   | pub struct Stacked<U: Protocol, L: Protocol> {
-  | --------------------------------------------
-  | |
-  | doesn't satisfy `_: IntoBoxedBytes`
-  | doesn't satisfy `_: IsSafeToWrite`
+  | -------------------------------------------- doesn't satisfy `_: IntoBoxedBytes` or `_: IsSafeToWrite`
   |
   = note: the following trait bounds were not satisfied:
           `Stacked<crabnet::transport::Udp, [u8; 4]>: IsSafeToWrite`
@@ -29,10 +26,7 @@ error[E0599]: the method `into_boxed_bytes` exists for struct `Udp`, but its tra
  ::: src/transport/udp.rs
   |
   | pub struct Udp {
-  | --------------
-  | |
-  | doesn't satisfy `crabnet::transport::Udp: IntoBoxedBytes`
-  | doesn't satisfy `crabnet::transport::Udp: IsSafeToWrite`
+  | -------------- doesn't satisfy `crabnet::transport::Udp: IntoBoxedBytes` or `crabnet::transport::Udp: IsSafeToWrite`
   |
   = note: the following trait bounds were not satisfied:
           `crabnet::transport::Udp: IsSafeToWrite`

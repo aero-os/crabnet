@@ -5,7 +5,7 @@ use byte_endian::BigEndian;
 use static_assertions::const_assert_eq;
 
 use crate::network::Ipv4;
-use crate::{Parsable, Parsed, PointerExtension, Protocol, Stack, Stacked, StackingAnchor};
+use crate::{Parsable, Parsed, Protocol, Stack, Stacked, StackingAnchor};
 
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
 #[repr(transparent)]

@@ -2,7 +2,7 @@ error[E0277]: the trait bound `Eth: StackingAnchor<Ipv4>` is not satisfied
  --> tests/ui/valid_parent.rs:8:17
   |
 8 |     let x = eth / udp;
-  |                 ^ the trait `StackingAnchor<Ipv4>` is not implemented for `Eth`
+  |                 ^ the trait `StackingAnchor<Ipv4>` is not implemented for `Eth`, which is required by `Eth: Div<_>`
   |
   = help: the trait `StackingAnchor<Eth>` is implemented for `Eth`
   = help: for that trait implementation, expected `Eth`, found `Ipv4`

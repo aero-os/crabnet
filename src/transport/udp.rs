@@ -2,7 +2,7 @@ use byte_endian::BigEndian;
 use static_assertions::const_assert_eq;
 
 use crate::network::Ipv4;
-use crate::{Parsable, PointerExtension, Protocol, Stack, Stacked, StackingAnchor};
+use crate::{Parsable, Protocol, Stack, Stacked, StackingAnchor};
 
 #[repr(C, packed)]
 pub struct Udp {

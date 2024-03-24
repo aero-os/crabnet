@@ -1,5 +1,11 @@
 #![no_std]
-#![feature(allocator_api, trivial_bounds, new_uninit, associated_type_defaults)]
+#![feature(
+    non_null_convenience,
+    allocator_api,
+    trivial_bounds,
+    new_uninit,
+    associated_type_defaults
+)]
 
 extern crate alloc;
 
@@ -89,23 +95,6 @@ where
     }
 
     fn into_boxed_bytes_in<A: Allocator>(self, alloc: A) -> Box<[u8], A>;
-}
-
-trait PointerExtension {
-    unsafe fn add(self, count: usize) -> Self;
-    unsafe fn sub(self, count: usize) -> Self;
-}
-
-impl<T> PointerExtension for NonNull<T> {
-    #[inline]
-    unsafe fn add(self, count: usize) -> Self {
-        NonNull::new_unchecked(self.as_ptr().add(count))
-    }
-
-    #[inline]
-    unsafe fn sub(self, count: usize) -> Self {
-        NonNull::new_unchecked(self.as_ptr().sub(count))
-    }
 }
 
 // impl for [T; N]
